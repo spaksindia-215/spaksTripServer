@@ -164,8 +164,12 @@ async function authenticate(): Promise<string> {
   });
 
   if (data.Status !== 1) {
+    // Surface TBO's own Error detail (ErrorCode/ErrorMessage) — it's what tells
+    // apart a credential mismatch from a non-whitelisted egress IP.
+    const code = data.Error?.ErrorCode ?? "?";
+    const message = data.Error?.ErrorMessage ?? "(no ErrorMessage)";
     throw new Error(
-      `TBO auth returned non-success Status (expected 1, got ${data.Status ?? "undefined"})`,
+      `TBO auth returned non-success Status (expected 1, got ${data.Status ?? "undefined"}); ErrorCode=${code}; ErrorMessage=${message}`,
     );
   }
 
