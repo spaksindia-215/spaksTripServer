@@ -96,7 +96,13 @@ function maskToken(value: unknown): string {
 
 async function authenticate(): Promise<string> {
   const userName = process.env.TBO_AIR_USERNAME;
-  const password = process.env.TBO_AIR_PASSWORD;
+  // TBO_AIR_PASSWORD_B64 (base64) wins when set. Some hosts auto-escape '#'/'$' in
+  // plain env values (they arrive as "Sp@k\#12D\$"); base64 has no special chars to
+  // mangle. Falls back to the plain TBO_AIR_PASSWORD when the b64 var is absent.
+  const passwordB64 = process.env.TBO_AIR_PASSWORD_B64;
+  const password = passwordB64
+    ? Buffer.from(passwordB64.trim(), "base64").toString("utf8")
+    : process.env.TBO_AIR_PASSWORD;
   const endUserIp = process.env.TBO_END_USER_IP ?? "1.1.1.1";
   const clientId = process.env.TBO_CLIENT_ID ?? "ApiIntegrationNew";
 
