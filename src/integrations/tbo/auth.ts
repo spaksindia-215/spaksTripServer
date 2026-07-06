@@ -95,14 +95,13 @@ function maskToken(value: unknown): string {
 }
 
 async function authenticate(): Promise<string> {
+  // Hardcoded TBO Air credentials. The deploy host mangles special chars ('#','$')
+  // in env values (they arrive escaped/corrupted), so the live password is set
+  // directly here. Acceptable because only our whitelisted IP can authenticate with
+  // TBO. Revert to env (TBO_AIR_PASSWORD*) and rotate the password if the IP
+  // whitelist widens or the repo is ever shared/made public.
   const userName = process.env.TBO_AIR_USERNAME;
-  // TBO_AIR_PASSWORD_B64 (base64) wins when set. Some hosts auto-escape '#'/'$' in
-  // plain env values (they arrive as "Sp@k\#12D\$"); base64 has no special chars to
-  // mangle. Falls back to the plain TBO_AIR_PASSWORD when the b64 var is absent.
-  const passwordB64 = process.env.TBO_AIR_PASSWORD_B64;
-  const password = passwordB64
-    ? Buffer.from(passwordB64.trim(), "base64").toString("utf8")
-    : process.env.TBO_AIR_PASSWORD;
+  const password = "Sp@k#12D$";
   const endUserIp = process.env.TBO_END_USER_IP ?? "1.1.1.1";
   const clientId = process.env.TBO_CLIENT_ID ?? "ApiIntegrationNew";
 
@@ -120,17 +119,6 @@ async function authenticate(): Promise<string> {
     Password: password,
     EndUserIp: endUserIp,
   };
-
-  // ── TEMP DEBUG (remove after fixing TBO auth) ─────────────────────────────
-  // Prints the EXACT credential bytes so we can see if the deploy env mangled the
-  // password — JSON.stringify exposes hidden whitespace/quotes, length + charCodes
-  // catch a `#` comment-truncation (→ "Sp@k", len 4) or `$` expansion. SECRET IN
-  // LOGS — delete this block once the credential is confirmed correct.
-  console.warn(
-    `[TBO auth DEBUG] user=${JSON.stringify(userName)} pass=${JSON.stringify(password)} ` +
-      `passLen=${password.length} passCodes=[${[...password].map((c) => c.charCodeAt(0)).join(",")}] ` +
-      `clientId=${JSON.stringify(clientId)} endUserIp=${JSON.stringify(endUserIp)} authUrl=${url}`,
-  );
 
   logRequest("Authenticate", url, { ...body, Password: "***" });
 
