@@ -95,14 +95,14 @@ function maskToken(value: unknown): string {
 }
 
 async function authenticate(): Promise<string> {
-  const userName = process.env.TBO_USER_NAME;
-  const password = process.env.TBO_PASSWORD;
+  const userName = process.env.TBO_AIR_USERNAME;
+  const password = process.env.TBO_AIR_PASSWORD;
   const endUserIp = process.env.TBO_END_USER_IP ?? "1.1.1.1";
   const clientId = process.env.TBO_CLIENT_ID ?? "ApiIntegrationNew";
 
   if (!userName || !password) {
     throw new Error(
-      "TBO credentials not configured. Set TBO_USER_NAME and TBO_PASSWORD in .env.local",
+      "TBO Air credentials not configured. Set TBO_AIR_USERNAME and TBO_AIR_PASSWORD.",
     );
   }
 
@@ -114,6 +114,17 @@ async function authenticate(): Promise<string> {
     Password: password,
     EndUserIp: endUserIp,
   };
+
+  // ── TEMP DEBUG (remove after fixing TBO auth) ─────────────────────────────
+  // Prints the EXACT credential bytes so we can see if the deploy env mangled the
+  // password — JSON.stringify exposes hidden whitespace/quotes, length + charCodes
+  // catch a `#` comment-truncation (→ "Sp@k", len 4) or `$` expansion. SECRET IN
+  // LOGS — delete this block once the credential is confirmed correct.
+  console.warn(
+    `[TBO auth DEBUG] user=${JSON.stringify(userName)} pass=${JSON.stringify(password)} ` +
+      `passLen=${password.length} passCodes=[${[...password].map((c) => c.charCodeAt(0)).join(",")}] ` +
+      `clientId=${JSON.stringify(clientId)} endUserIp=${JSON.stringify(endUserIp)} authUrl=${url}`,
+  );
 
   logRequest("Authenticate", url, { ...body, Password: "***" });
 
