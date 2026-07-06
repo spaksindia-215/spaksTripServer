@@ -126,7 +126,8 @@ export type CruiseDepartureStatus = (typeof CRUISE_DEPARTURE_STATUS)[number];
 // ── Event ────────────────────────────────────────────────────────────────────
 // Events get their own richer lifecycle than the shared RESOURCE_STATUS
 // (draft|active|paused|suspended): a listing is submitted for review, published,
-// rejected, archived (soft-delete) or cancelled. Kept separate so the existing
+// rejected, archived (a partner-set "retired" lifecycle state, not a delete) or
+// cancelled. Deleting an event is a hard delete. Kept separate so the existing
 // partner resources are untouched.
 export const EVENT_STATUS = [
   "draft",

@@ -191,9 +191,11 @@ export function makeServiceModule(cfg: ServiceModuleConfig): ServiceModuleHandle
 
     async partnerDelete(req, res, next) {
       try {
+        // Hard delete: a partner deleting a listing is final, with no recovery.
+        // Existing enquiry leads are kept (they are the partner's customer records);
+        // their `listing` ref simply resolves to null once the listing is gone.
         const doc = await ownedListing(req);
-        doc.status = "suspended"; // soft-delete
-        await doc.save();
+        await doc.deleteOne();
         res.status(204).end();
       } catch (e) {
         next(e);

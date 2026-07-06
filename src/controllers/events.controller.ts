@@ -211,12 +211,20 @@ export async function updateEvent(req: Request, res: Response, next: NextFunctio
   }
 }
 
-// DELETE /api/partner/events/:id — soft delete (archive).
+// DELETE /api/partner/events/:id — hard delete, final with no recovery. Refused
+// while the event still has bookings so paid attendee records are never orphaned;
+// a partner who wants to pull a booked event must cancel it (refund/notify) first.
 export async function deleteEvent(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const doc = await ownedEvent(req);
-    doc.status = "archived";
-    await doc.save();
+    const bookingCount = await EventBookingModel.countDocuments({ event: doc._id });
+    if (bookingCount > 0) {
+      throw new HttpError(
+        409,
+        "This event has bookings and can't be deleted. Cancel the event instead to notify and refund attendees.",
+      );
+    }
+    await doc.deleteOne();
     res.status(204).end();
   } catch (e) {
     next(e);

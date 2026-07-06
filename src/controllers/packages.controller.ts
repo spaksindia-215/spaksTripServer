@@ -161,9 +161,12 @@ export async function partnerUpdatePackage(req: Request, res: Response, next: Ne
 
 export async function partnerDeletePackage(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // Hard delete: a partner deleting a package is final, with no recovery.
+    // Cascade the operator offers attached to it (mirrors adminDeletePackage);
+    // enquiry leads are kept and simply resolve to a null package reference.
     const doc = await ownedPackage(req);
-    doc.status = "suspended"; // soft-delete: hide from public, keep referencing offers intact
-    await doc.save();
+    await doc.deleteOne();
+    await PackageOfferModel.deleteMany({ package: doc._id });
     res.status(204).end();
   } catch (e) {
     next(e);
@@ -241,7 +244,7 @@ function readPath(obj: Record<string, unknown>, path: string): string {
 
 // GET /api/partner/packages/my-services — the partner's own listings across every
 // vertical, grouped, so the bundle builder can pick real components. Excludes
-// soft-deleted (suspended) listings.
+// suspended listings (not offerable as a bundle component).
 export async function partnerListMyServices(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const partnerId = userIdFrom(req);

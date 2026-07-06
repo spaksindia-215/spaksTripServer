@@ -156,9 +156,10 @@ export async function partnerSetStatus(req: Request, res: Response, next: NextFu
 
 export async function partnerDelete(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // Hard delete: a partner deleting a listing is final, with no recovery.
+    // Existing enquiry leads are kept; their `listing` ref resolves to null.
     const doc = await ownedListing(req);
-    doc.status = "suspended"; // soft-delete: hide from public, keep leads intact
-    await doc.save();
+    await doc.deleteOne();
     res.status(204).end();
   } catch (e) {
     next(e);
