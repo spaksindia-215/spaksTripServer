@@ -5,6 +5,7 @@ import { UserModel } from "../models/User";
 import { ServiceEnquiryModel } from "../models/partner/ServiceEnquiry";
 import { SERVICE_VERTICALS } from "../models/partner/_shared/enums";
 import { HttpError } from "../middleware/error";
+import { env } from "../config/env";
 
 function ownerIdFrom(req: Request): string {
   if (!req.user) throw new HttpError(401, "Unauthorized");
@@ -52,14 +53,53 @@ export async function listEnquiries(req: Request, res: Response, next: NextFunct
   }
 }
 
+// Hotel bookings are actually confirmed/vouchered by TBO at booking time (see
+// the Next.js /api/hotels/razorpay/verify-payment flow), so a cancellation
+// must reach TBO's SendChangeRequest API — merely flagging cancelRequestedAt
+// here never did that (TBO certification: "not receiving the request"). The
+// TBO BookingId isn't stored on this document; `pnr` holds TBO's BookingRefNo
+// (set from the same tboResult.bookingRefNo as hotel_payment_records.tboBookingRefNo),
+// so we resolve it back to a BookingId on the Next.js side, which owns the TBO
+// hotel adapter and the hotel_payment_records collection.
+async function cancelHotelBookingWithTbo(bookingRefNo: string, remarks?: string): Promise<void> {
+  const res = await fetch(new URL("/api/internal/hotels/cancel-by-ref", env.clientOrigin), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bookingRefNo, remarks }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new HttpError(502, body?.error || `TBO cancel failed (HTTP ${res.status})`);
+  }
+}
+
 export async function requestCancel(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const ownerId = ownerIdFrom(req);
     const id = paramId(req);
     // Only active/held bookings can be cancel-requested, and only the owner's own.
+    const existing = await BookingModel.findOne({
+      _id: id,
+      ownerId,
+      status: { $in: ["active", "held"] },
+    });
+    if (!existing) throw new HttpError(404, "Booking not found or not cancellable");
+
+    // Hotel bookings must be confirmed with TBO before we record the cancellation —
+    // never mark it cancelled just because our own DB update succeeded.
+    if (existing.productType === "hotel" && existing.pnr) {
+      await cancelHotelBookingWithTbo(existing.pnr, req.body?.remarks);
+    }
+
     const booking = await BookingModel.findOneAndUpdate(
-      { _id: id, ownerId, status: { $in: ["active", "held"] } },
-      { $set: { cancelRequestedAt: new Date() } },
+      { _id: id, ownerId },
+      {
+        $set: {
+          cancelRequestedAt: new Date(),
+          ...(existing.productType === "hotel" && existing.pnr ? { status: "cancelled" } : {}),
+        },
+      },
       { new: true },
     );
     if (!booking) throw new HttpError(404, "Booking not found or not cancellable");
