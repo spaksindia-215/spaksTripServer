@@ -1,6 +1,14 @@
 import type { Request } from "express";
 import { getAgentConfig } from "./agentCache";
-import type { MarkupRule } from "../models/User";
+import {
+  applyMarkup,
+  AgentPricingUnavailableError,
+  type MarkupRule,
+  type TwoTierPricing,
+} from "./markupEngine";
+
+export type { TwoTierPricing };
+export { AgentPricingUnavailableError };
 
 // Server-side port of client/src/lib/server/agentMarkup.ts.
 //
@@ -13,35 +21,20 @@ import type { MarkupRule } from "../models/User";
 // in-process cache (getAgentConfig) — no self-call. Agent context arrives via the
 // x-agent-slug / x-agent-id headers that proxyToRailway forwards from Vercel.
 
-export type TwoTierPricing = {
-  tboFare: number;
-  platformMarkup: number; // always 0 — kept for booking-record schema compatibility
-  agentNetRate: number; // == tboFare (no L1)
-  agentMarkup: number;
-  customerPaid: number;
-};
-
 type PricingProduct = "flights" | "hotels" | "taxi";
-
-function applyMarkup(fare: number, rule: MarkupRule): number {
-  const raw =
-    rule.type === "percent"
-      ? Math.round(fare * (1 + rule.value / 100))
-      : fare + rule.value;
-  if (rule.cap != null && rule.cap > 0) return Math.min(raw, fare + rule.cap);
-  return raw;
-}
 
 async function getAgentMarkup(
   product: PricingProduct,
   slug: string,
 ): Promise<MarkupRule | null> {
+  let agent;
   try {
-    const agent = await getAgentConfig(slug);
-    return agent?.markup?.[product] ?? null;
-  } catch {
-    return null;
+    agent = await getAgentConfig(slug);
+  } catch (err) {
+    throw new AgentPricingUnavailableError(slug, err);
   }
+  if (!agent) throw new AgentPricingUnavailableError(slug);
+  return agent.markup?.[product] ?? null;
 }
 
 function agentSlug(req: Request): string | undefined {
@@ -56,6 +49,10 @@ const passthrough = (fare: number): number => fare;
  * Returns a synchronous pricer for the current request:
  *   - Subdomain (x-agent-slug present): TBO fare + agent markup
  *   - Apex / agent portal / anonymous:  TBO fare unchanged
+ *
+ * Throws AgentPricingUnavailableError if a subdomain's markup genuinely
+ * cannot be resolved — the caller decides whether that's fatal (a final price
+ * quote) or safe to catch-and-passthrough (a search/listing result).
  */
 export async function buildFarePricer(
   product: PricingProduct,
@@ -71,6 +68,7 @@ export async function buildFarePricer(
 /**
  * Full pricing breakdown for a subdomain booking record. Returns null when not a
  * subdomain request. platformMarkup is always 0 (settlement schema compatibility).
+ * Throws AgentPricingUnavailableError under the same conditions as buildFarePricer.
  */
 export async function buildTwoTierPricing(
   tboFare: number,

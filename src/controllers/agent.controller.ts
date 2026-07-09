@@ -2,15 +2,28 @@ import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { BookingModel, BOOKING_STATUSES, type BookingStatus } from "../models/Booking";
-import { UserModel, type Role, MARKUP_TYPES, type MarkupRule } from "../models/User";
+import { UserModel, type Role, MARKUP_TYPES, type MarkupRule, BRAND_FONTS } from "../models/User";
 import { validateBookingCreate } from "../validators/agent.validators";
 import { HttpError } from "../middleware/error";
 import { invalidateAgentCache } from "../lib/agentCache";
 import { uploadToCloudinary, type UploadedFile } from "../lib/cloudinary";
+import {
+  getOrCreateWallet,
+  debitForBooking,
+  refundForBooking,
+  listLedger,
+  earningsSummary,
+  InsufficientWalletBalanceError,
+} from "../services/walletService";
+import { logger } from "../lib/logger";
 
 // Strip fields the agent must never see (platform-tier pricing internals).
 // Called on every booking returned by agent-facing endpoints.
-function toAgentBooking(doc: { toJSON(): Record<string, unknown> }): Record<string, unknown> {
+// Exported for the response-shape test (agent.controller.test.ts) — this
+// function is the ONE enforcement point for the "agents never see tboFare/
+// platformMarkup" hard invariant, so it must be directly testable without a
+// live DB.
+export function toAgentBooking(doc: { toJSON(): Record<string, unknown> }): Record<string, unknown> {
   const obj = doc.toJSON();
   delete obj.tboFare;
   delete obj.platformMarkup;
@@ -20,6 +33,20 @@ function toAgentBooking(doc: { toJSON(): Record<string, unknown> }): Record<stri
 function ownerIdFrom(req: Request): string {
   if (!req.user) throw new HttpError(401, "Unauthorized");
   return req.user.sub;
+}
+
+// Insufficient balance is an expected 402, not a server error — but it's a
+// meaningful business signal worth being able to grep by agentId (e.g. "is
+// this agent's booking creation failing because they're out of funds?").
+// Reads req.user directly (rather than taking an ownerId param) so it works
+// from a catch block even when the ownerId-extracting line itself threw.
+function logIfInsufficientBalance(req: Request, e: unknown): void {
+  if (e instanceof InsufficientWalletBalanceError) {
+    logger.info(
+      { event: "wallet_debit_blocked", agentId: req.user?.sub ?? null, message: e.message },
+      "Booking blocked — insufficient wallet balance",
+    );
+  }
 }
 
 function ownerRoleFrom(req: Request): Role {
@@ -65,6 +92,7 @@ export async function listBookings(req: Request, res: Response, next: NextFuncti
       filter.status = status as BookingStatus;
     }
 
+    // tenant-scope-ok: filter is seeded with { ownerId } just above.
     const items = await BookingModel.find(filter).sort({ createdAt: -1 });
     res.json({ items: items.map(toAgentBooking) });
   } catch (e) {
@@ -95,7 +123,7 @@ export async function createBooking(req: Request, res: Response, next: NextFunct
 
     const isAgentRole = ownerRole === "agent" || ownerRole === "b2b_agent";
 
-    const booking = await BookingModel.create({
+    const bookingFields = {
       ownerId,
       ownerRole,
       productType: input.productType,
@@ -115,42 +143,116 @@ export async function createBooking(req: Request, res: Response, next: NextFunct
         agentMarkup:  0,
         customerPaid: input.amount,
       } : {}),
-    });
+    };
 
+    // Pre-funded wallet: a booking created directly as ACTIVE debits the
+    // agent's net cost immediately, atomically with the booking write —
+    // insufficient balance blocks the booking (fail closed, named error).
+    // Holds don't debit; they consume credit (above) and debit on confirm.
+    if (input.status === "active") {
+      const _id = new mongoose.Types.ObjectId();
+      await debitForBooking(
+        ownerId,
+        _id,
+        input.amount,
+        async (session) => {
+          await BookingModel.create([{ _id, ...bookingFields }], { session });
+        },
+        { source: "agent_portal_create", pnr: input.pnr ?? null },
+      );
+      // tenant-scope-ok: _id was freshly generated above and the create() that
+      // wrote it was itself ownerId-scoped (bookingFields.ownerId) — no other
+      // tenant can possibly hold this exact ObjectId.
+      const booking = await BookingModel.findById(_id);
+      if (!booking) throw new HttpError(500, "Booking write did not persist");
+      res.status(201).json({ booking: toAgentBooking(booking) });
+      return;
+    }
+
+    const booking = await BookingModel.create(bookingFields);
     res.status(201).json({ booking: toAgentBooking(booking) });
   } catch (e) {
+    logIfInsufficientBalance(req, e);
     next(e);
   }
 }
 
 // Transition a held booking to confirmed ("active").
+// Pre-funded wallet: confirmation is when the agent's net cost is debited —
+// atomically with the status flip; insufficient balance blocks confirmation
+// (fail closed) and the hold stays held.
 export async function confirmHold(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const ownerId = ownerIdFrom(req);
     const id = paramId(req);
-    const booking = await BookingModel.findOneAndUpdate(
-      { _id: id, ownerId, status: "held", holdExpiresAt: { $gt: new Date() } },
-      { $set: { status: "active" }, $unset: { holdExpiresAt: "" } },
-      { new: true },
+
+    const held = await BookingModel.findOne({
+      _id: id, ownerId, status: "held", holdExpiresAt: { $gt: new Date() },
+    });
+    if (!held) throw new HttpError(404, "Active hold not found (it may have expired)");
+
+    await debitForBooking(
+      ownerId,
+      held._id,
+      held.amount,
+      async (session) => {
+        // Re-checked inside the transaction: a concurrent confirm/cancel/expiry
+        // makes this match nothing → the whole transaction (incl. the debit)
+        // rolls back. The unique {bookingId, BOOKING_DEBIT} ledger index is the
+        // second line of defence against a double debit.
+        const updated = await BookingModel.findOneAndUpdate(
+          { _id: id, ownerId, status: "held", holdExpiresAt: { $gt: new Date() } },
+          { $set: { status: "active" }, $unset: { holdExpiresAt: "" } },
+          { new: true, session },
+        );
+        if (!updated) throw new HttpError(404, "Active hold not found (it may have expired)");
+      },
+      { source: "agent_portal_confirm", pnr: held.pnr ?? null },
     );
-    if (!booking) throw new HttpError(404, "Active hold not found (it may have expired)");
+
+    // tenant-scope-ok: the findOneAndUpdate above already proved `id` belongs
+    // to this ownerId (inside the transaction) — this is just a fresh re-read.
+    const booking = await BookingModel.findById(id);
+    if (!booking) throw new HttpError(500, "Booking not found after confirmation");
     res.json({ booking: toAgentBooking(booking) });
   } catch (e) {
+    logIfInsufficientBalance(req, e);
     next(e);
   }
 }
 
 // Cancel an active booking or release a held one.
+// Pre-funded wallet: cancelling a debited (active) booking credits the debit
+// back as a NEW REFUND ledger entry (never a mutation), atomically with the
+// status flip. Releasing a hold refunds nothing — holds were never debited.
 export async function cancelBooking(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const ownerId = ownerIdFrom(req);
     const id = paramId(req);
-    const booking = await BookingModel.findOneAndUpdate(
-      { _id: id, ownerId, status: { $in: ["active", "held"] } },
-      { $set: { status: "cancelled" } },
-      { new: true },
+
+    const cancellable = await BookingModel.findOne({
+      _id: id, ownerId, status: { $in: ["active", "held"] },
+    });
+    if (!cancellable) throw new HttpError(404, "Booking not found or not cancellable");
+
+    await refundForBooking(
+      ownerId,
+      cancellable._id,
+      async (session) => {
+        const updated = await BookingModel.findOneAndUpdate(
+          { _id: id, ownerId, status: { $in: ["active", "held"] } },
+          { $set: { status: "cancelled" } },
+          { new: true, session },
+        );
+        if (!updated) throw new HttpError(404, "Booking not found or not cancellable");
+      },
+      { source: "agent_portal_cancel", pnr: cancellable.pnr ?? null },
     );
-    if (!booking) throw new HttpError(404, "Booking not found or not cancellable");
+
+    // tenant-scope-ok: the findOneAndUpdate above already proved `id` belongs
+    // to this ownerId (inside the transaction) — this is just a fresh re-read.
+    const booking = await BookingModel.findById(id);
+    if (!booking) throw new HttpError(500, "Booking not found after cancellation");
     res.json({ booking: toAgentBooking(booking) });
   } catch (e) {
     next(e);
@@ -198,9 +300,16 @@ export async function updateMarkup(req: Request, res: Response, next: NextFuncti
     const ownerId = ownerIdFrom(req);
     const body = req.body as Record<string, unknown>;
 
-    const updates: Partial<Record<"flights" | "hotels" | "taxi", MarkupRule>> = {};
+    // Taxi is an enquiry-only vertical (leads go to admin/partner; no priced
+    // checkout), so markup can never apply to it. A settable knob that does
+    // nothing is a settlement-trust bug — reject writes outright.
+    if (body.taxi !== undefined) {
+      throw new HttpError(400, "Markup does not apply to taxi — it is an enquiry-based vertical with no priced checkout");
+    }
 
-    for (const key of ["flights", "hotels", "taxi"] as const) {
+    const updates: Partial<Record<"flights" | "hotels", MarkupRule>> = {};
+
+    for (const key of ["flights", "hotels"] as const) {
       if (body[key] !== undefined) {
         if (!isMarkupRuleBody(body[key])) {
           throw new HttpError(400, `Invalid markup rule for ${key}`);
@@ -224,7 +333,7 @@ export async function updateMarkup(req: Request, res: Response, next: NextFuncti
     }
 
     if (Object.keys(updates).length === 0) {
-      throw new HttpError(400, "Provide at least one of: flights, hotels, taxi");
+      throw new HttpError(400, "Provide at least one of: flights, hotels");
     }
 
     const setFields = Object.fromEntries(
@@ -240,7 +349,7 @@ export async function updateMarkup(req: Request, res: Response, next: NextFuncti
     if (!user) throw new HttpError(404, "User not found");
 
     // Invalidate agent config cache so the next subdomain request re-fetches markup.
-    if (user.slug) invalidateAgentCache(user.slug);
+    if (user.slug) await invalidateAgentCache(user.slug);
 
     res.json({ markup: user.markup ?? null });
   } catch (e) {
@@ -262,6 +371,8 @@ export async function getBranding(req: Request, res: Response, next: NextFunctio
       const base = slugifyForController(user.name);
       const hex  = crypto.randomBytes(3).toString("hex");
       slug = `${base}-${hex}`;
+      // tenant-scope-ok: user._id came from UserModel.findById(ownerId) above —
+      // this is the caller's own record.
       await UserModel.updateOne({ _id: user._id, slug: { $exists: false } }, { $set: { slug } });
     }
 
@@ -308,10 +419,24 @@ export async function updateBranding(req: Request, res: Response, next: NextFunc
       setOps["branding.primaryColor"] = body.primaryColor;
     }
 
-    if (req.file) {
-      const logoUrl = await uploadToCloudinary(req.file as unknown as UploadedFile, "agent-logos");
-      setOps["branding.logo"] = logoUrl;
+    if (body.fontKey !== undefined) {
+      if (!(BRAND_FONTS as readonly string[]).includes(body.fontKey)) {
+        throw new HttpError(400, `fontKey must be one of: ${BRAND_FONTS.join(", ")}`);
+      }
+      setOps["branding.fontKey"] = body.fontKey;
     }
+
+    // Uploads: multer exposes named fields on req.files (logo, logoDark, favicon).
+    const files = (req.files ?? {}) as Record<string, UploadedFile[] | undefined>;
+    const uploadField = async (field: "logo" | "logoDark" | "favicon", folder: string) => {
+      const file = files[field]?.[0] ?? (field === "logo" ? (req.file as UploadedFile | undefined) : undefined);
+      if (!file) return;
+      const url = await uploadToCloudinary(file, folder);
+      setOps[`branding.${field}`] = url;
+    };
+    await uploadField("logo", "agent-logos");
+    await uploadField("logoDark", "agent-logos");
+    await uploadField("favicon", "agent-favicons");
 
     if (Object.keys(setOps).length === 0 && Object.keys(unsetOps).length === 0) {
       throw new HttpError(400, "Provide at least one branding field to update");
@@ -328,7 +453,7 @@ export async function updateBranding(req: Request, res: Response, next: NextFunc
 
     if (!user) throw new HttpError(404, "User not found");
 
-    if (user.slug) invalidateAgentCache(user.slug);
+    if (user.slug) await invalidateAgentCache(user.slug);
 
     res.json({ branding: user.branding ?? null });
   } catch (e) {
@@ -345,6 +470,9 @@ export async function getProfile(req: Request, res: Response, next: NextFunction
 
     const used = await creditUsed(ownerId);
     const limit = user.creditLimit;
+    // Wallet doc is the settlement source of truth (User.walletBalance is a
+    // legacy field, always 0 — the wallet starts fresh at 0 lazily).
+    const wallet = await getOrCreateWallet(ownerId);
     res.json({
       profile: {
         id: String(user._id),
@@ -362,8 +490,53 @@ export async function getProfile(req: Request, res: Response, next: NextFunction
         creditLimit: limit,
         creditUsed: used,
         creditAvailable: limit != null ? Math.max(0, limit - used) : null,
-        walletBalance: user.walletBalance,
+        walletBalance: wallet.balance,
       },
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// GET /api/agent/wallet — balance + per-month earnings summary.
+// Ledger entries and earnings expose only the agent's own numbers; the hard
+// invariant (no tboFare/platformMarkup to agents) holds: neither field is read.
+export async function getWallet(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const ownerId = ownerIdFrom(req);
+    const [wallet, earnings] = await Promise.all([
+      getOrCreateWallet(ownerId),
+      earningsSummary(ownerId, 12),
+    ]);
+    res.json({
+      wallet: { balance: wallet.balance, currency: wallet.currency },
+      earnings,
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// GET /api/agent/wallet/ledger?page=&pageSize= — paginated, tenant-scoped.
+export async function getWalletLedger(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const ownerId = ownerIdFrom(req);
+    const page = Number(req.query.page ?? 1);
+    const pageSize = Number(req.query.pageSize ?? 20);
+    const result = await listLedger(ownerId, page, pageSize);
+    res.json({
+      items: result.items.map((e) => ({
+        id: String(e._id),
+        type: e.type,
+        amount: e.amount,
+        balanceAfter: e.balanceAfter,
+        bookingId: e.bookingId ? String(e.bookingId) : null,
+        note: typeof e.meta?.note === "string" ? e.meta.note : null,
+        createdAt: e.createdAt,
+      })),
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
     });
   } catch (e) {
     next(e);

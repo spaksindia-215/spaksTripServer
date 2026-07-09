@@ -35,6 +35,8 @@ import {
 import { errorHandler } from "./middleware/error";
 import { securityHeaders } from "./middleware/securityHeaders";
 import { apiRateLimiter } from "./middleware/rateLimit";
+import { internalAuth } from "./middleware/internalAuth";
+import { logger } from "./lib/logger";
 // ADDED: PostgreSQL transaction layer (additive — never replaces MongoDB)
 import { testConnection } from "./config/postgres";
 import webhookRoutes from "./routes/webhooks";
@@ -109,7 +111,7 @@ async function main(): Promise<void> {
   app.use("/api/admin", adminRoutes);
   app.use("/api/customer", customerRoutes);
   app.use("/api/agent", agentRoutes);
-  app.use("/api/internal", internalRoutes);
+  app.use("/api/internal", internalAuth, internalRoutes);
   // TBO flight endpoints (migrated from Next.js so outbound TBO calls use Railway's
   // static IP). Public, like the original Next routes.
   app.use("/api/flights", flightsRoutes);
@@ -149,6 +151,15 @@ async function main(): Promise<void> {
   // testConnection() logs a warning and resolves — the server boots regardless
   // and all existing MongoDB features keep working.
   void testConnection();
+
+  if (isProd && !env.internalApiSecret) {
+    logger.warn(
+      { event: "internal_api_secret_not_set" },
+      "INTERNAL_API_SECRET is not set — /api/internal/* (agent-config, " +
+        "record-booking, …) is reachable by anyone who can guess the URL. " +
+        "Set it identically in both this server's env and the Next.js app's env.",
+    );
+  }
 
   // Background workers. Each guards internally against PostgreSQL being
   // unconfigured/unavailable.

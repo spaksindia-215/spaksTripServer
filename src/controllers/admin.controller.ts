@@ -8,6 +8,9 @@ import { PlatformConfigModel } from "../models/PlatformConfig";
 import { invalidatePlatformConfigCache } from "../lib/platformConfig";
 import { HttpError } from "../middleware/error";
 import { sendMail } from "../lib/mailer";
+import { getOrCreateWallet, recordManualMovement, listLedger } from "../services/walletService";
+import { invalidateAgentCache } from "../lib/agentCache";
+import { logger } from "../lib/logger";
 import {
   verifyAdminPassword,
   createAdminSessionToken,
@@ -145,6 +148,63 @@ export async function reject(req: Request, res: Response, next: NextFunction): P
   }
 }
 
+// POST /api/admin/users/:id/suspend — take a live agent's storefront offline.
+// Distinct from `reject` (which only applies to a still-pending application):
+// suspend targets an agent who was already ACTIVE and needs to be pulled down
+// (policy violation, non-payment, etc.) without discarding their account,
+// bookings, or wallet — reversible via unsuspend.
+export async function suspendAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = paramId(req);
+    const user = await UserModel.findById(id);
+    if (!user) throw new HttpError(404, "User not found");
+    if (user.role !== "agent" && user.role !== "b2b_agent") {
+      throw new HttpError(400, "Only agents and B2B agents can be suspended");
+    }
+    if (user.status !== "active") {
+      throw new HttpError(409, `Account is ${user.status}, not active`);
+    }
+
+    user.status = "suspended";
+    await user.save();
+    if (user.slug) await invalidateAgentCache(user.slug);
+
+    logger.info(
+      { event: "agent_suspended", agentId: String(user._id), slug: user.slug ?? null },
+      "Agent suspended",
+    );
+
+    res.json({ user: user.toJSON() });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// POST /api/admin/users/:id/unsuspend — restore a suspended agent's storefront.
+export async function unsuspendAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = paramId(req);
+    const user = await UserModel.findById(id);
+    if (!user) throw new HttpError(404, "User not found");
+    if (user.status !== "suspended") {
+      throw new HttpError(409, `Account is ${user.status}, not suspended`);
+    }
+
+    user.status = "active";
+    await user.save();
+    if (user.slug) await invalidateAgentCache(user.slug);
+
+    logger.info(
+      { event: "agent_unsuspended", agentId: String(user._id), slug: user.slug ?? null },
+      "Agent reinstated",
+    );
+
+    res.json({ user: user.toJSON() });
+  } catch (e) {
+    next(e);
+  }
+}
+
 // GET /api/admin/hotel-listings?status=pending — partner hotel listings for
 // the review queue. Defaults to "pending"; pass ?status=all to see every one.
 export async function listHotelListings(
@@ -230,6 +290,75 @@ export async function setCreditLimit(req: Request, res: Response, next: NextFunc
     user.creditLimit = creditLimit;
     await user.save();
     res.json({ user: user.toJSON() });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// GET /api/admin/users/:id/wallet — agent wallet balance + recent ledger.
+export async function getAgentWallet(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = paramId(req);
+    const user = await UserModel.findById(id).select("role name email");
+    if (!user) throw new HttpError(404, "User not found");
+    if (user.role !== "agent" && user.role !== "b2b_agent") {
+      throw new HttpError(400, "Only agents and B2B agents have a wallet");
+    }
+    const wallet = await getOrCreateWallet(id);
+    const page = Number(req.query.page ?? 1);
+    const pageSize = Number(req.query.pageSize ?? 20);
+    const ledger = await listLedger(id, page, pageSize);
+    res.json({
+      wallet: { balance: wallet.balance, currency: wallet.currency },
+      ledger: {
+        items: ledger.items.map((e) => e.toJSON()),
+        total: ledger.total,
+        page: ledger.page,
+        pageSize: ledger.pageSize,
+      },
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// POST /api/admin/users/:id/wallet — manual TOPUP or ADJUSTMENT.
+// An audit note is mandatory: manual money movements must be explainable later.
+export async function recordAgentWalletMovement(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = paramId(req);
+    const body = isObject(req.body) ? req.body : {};
+    const type = body.type;
+    const amount = typeof body.amount === "number" ? body.amount : Number(body.amount);
+    const note = typeof body.note === "string" ? body.note.trim() : "";
+
+    if (type !== "TOPUP" && type !== "ADJUSTMENT") {
+      throw new HttpError(400, "type must be TOPUP or ADJUSTMENT");
+    }
+    if (!note) throw new HttpError(400, "An audit note is required for manual wallet movements");
+    if (!Number.isFinite(amount) || amount === 0) {
+      throw new HttpError(400, "amount must be a non-zero number (₹)");
+    }
+
+    const user = await UserModel.findById(id).select("role");
+    if (!user) throw new HttpError(404, "User not found");
+    if (user.role !== "agent" && user.role !== "b2b_agent") {
+      throw new HttpError(400, "Only agents and B2B agents have a wallet");
+    }
+
+    const entry = await recordManualMovement({
+      agentId: id,
+      type,
+      amount,
+      meta: { note, actor: "superadmin" },
+    });
+
+    logger.info(
+      { event: "wallet_manual_movement", agentId: id, type, amount, note },
+      "Superadmin recorded a manual wallet movement",
+    );
+
+    res.status(201).json({ entry: entry.toJSON() });
   } catch (e) {
     next(e);
   }

@@ -23,7 +23,7 @@ import type { TboFareBreakdown } from "../integrations/tbo/types";
 import { createOrder, verifySignature, initiateRefund, fetchPayment } from "../integrations/tbo/payments/razorpay";
 import { getPaymentDb } from "../integrations/tbo/payments/db";
 import { sendFlightConfirmation } from "../integrations/tbo/payments/mailer";
-import { buildFarePricer, buildTwoTierPricing, type TwoTierPricing } from "../lib/tboMarkup";
+import { buildFarePricer, buildTwoTierPricing, AgentPricingUnavailableError, type TwoTierPricing } from "../lib/tboMarkup";
 import { signPriceToken, verifyPriceToken } from "../lib/priceToken";
 import { recordSubdomainBooking } from "../services/subdomainBooking";
 import { recordCustomerBooking } from "../services/customerBooking";
@@ -102,7 +102,16 @@ export async function searchFlights(req: Request, res: Response): Promise<void> 
 
     const result = await tboSearchFlights(body);
 
-    const priceFlight = await buildFarePricer("flights", req);
+    // Search is a listing, not a final price quote — fail OPEN if the agent's
+    // markup can't be resolved (show raw TBO fares rather than error the whole
+    // search). fare-quote below is the actual quote step and fails CLOSED.
+    let priceFlight = (fare: number): number => fare;
+    try {
+      priceFlight = await buildFarePricer("flights", req);
+    } catch (e) {
+      if (!(e instanceof AgentPricingUnavailableError)) throw e;
+      console.error("[API /api/flights/search] agent pricing unavailable, showing raw fares:", e.message);
+    }
     for (const offer of result.offers) {
       offer.basePrice = priceFlight(offer.basePrice);
     }
@@ -155,6 +164,12 @@ export async function fareQuote(req: Request, res: Response): Promise<void> {
     res.json({ success: true, data: { ...result, priceToken } });
   } catch (e) {
     if (e instanceof TboFareExpiredError) return fail(res, "Fare has expired. Please search again.", 410);
+    // Fail CLOSED: this is the final quote the customer pays against — an
+    // unresolvable agent markup must never silently fall back to the raw
+    // TBO fare (undercharges relative to what the agent configured).
+    if (e instanceof AgentPricingUnavailableError) {
+      return fail(res, "Pricing temporarily unavailable — please retry.", 503);
+    }
     return fail(res, e instanceof Error ? e.message : "FareQuote failed", 500);
   }
 }
@@ -284,11 +299,18 @@ export async function ticket(req: Request, res: Response): Promise<void> {
       const agentId = req.get("x-agent-id");
       if (agentId) {
         const rawFare = tboFareFrom(body.fareBreakdown, body.returnFareBreakdown);
-        void buildTwoTierPricing(rawFare, "flights", req).then((pricing) => {
-          if (pricing) {
-            return recordSubdomainBooking({ agentId, productType: "flight", pnr: ticketResult.pnr || detail.pnr, pricing });
-          }
-        });
+        // Booking-record only — the customer already paid the TBO-locked fare
+        // from fare-quote, so a pricing-attribution failure here must not
+        // block ticket issuance. Log and move on (fire-and-forget).
+        void buildTwoTierPricing(rawFare, "flights", req)
+          .then((pricing) => {
+            if (pricing) {
+              return recordSubdomainBooking({ agentId, productType: "flight", pnr: ticketResult.pnr || detail.pnr, pricing });
+            }
+          })
+          .catch((e: unknown) =>
+            console.error("[ticket] booking-record pricing failed:", e instanceof Error ? e.message : String(e)),
+          );
       }
 
       res.json({
@@ -336,11 +358,16 @@ export async function ticket(req: Request, res: Response): Promise<void> {
       const fareBreakdown = (body as Record<string, unknown>).fareBreakdown as TboFareBreakdown[];
       const returnFareBreakdown = (body as Record<string, unknown>).returnFareBreakdown as TboFareBreakdown[] | undefined;
       const rawFare = tboFareFrom(fareBreakdown, returnFareBreakdown);
-      void buildTwoTierPricing(rawFare, "flights", req).then((pricing) => {
-        if (pricing) {
-          return recordSubdomainBooking({ agentId, productType: "flight", pnr: ticketResult.pnr || body.pnr || detail.pnr, pricing });
-        }
-      });
+      // Booking-record only — same rationale as the LCC branch above.
+      void buildTwoTierPricing(rawFare, "flights", req)
+        .then((pricing) => {
+          if (pricing) {
+            return recordSubdomainBooking({ agentId, productType: "flight", pnr: ticketResult.pnr || body.pnr || detail.pnr, pricing });
+          }
+        })
+        .catch((e: unknown) =>
+          console.error("[ticket] booking-record pricing failed:", e instanceof Error ? e.message : String(e)),
+        );
     }
 
     res.json({
@@ -660,7 +687,18 @@ export async function verifyPayment(req: Request, res: Response): Promise<void> 
 
     const agentId = req.get("x-agent-id") ?? undefined;
     const rawFare = tboFareFrom(booking.fareBreakdown, booking.returnFareBreakdown);
-    const pricing = agentId ? await buildTwoTierPricing(rawFare, "flights", req) : null;
+    // Booking-record only — Razorpay payment is already captured by this
+    // point, so a pricing-attribution failure must not abort the booking;
+    // log and persist without a pricing breakdown (matches pre-existing
+    // null-safety below: `...(pricing ? { pricing } : {})`).
+    let pricing: TwoTierPricing | null = null;
+    if (agentId) {
+      try {
+        pricing = await buildTwoTierPricing(rawFare, "flights", req);
+      } catch (e) {
+        console.error(`\n[RZP ${ts()}] ⚠ agent pricing unavailable; recording booking without pricing breakdown\n  ERROR: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
 
     const now = new Date();
     await col.insertOne({

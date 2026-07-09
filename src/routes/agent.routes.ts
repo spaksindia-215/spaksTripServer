@@ -6,6 +6,8 @@ import {
   cancelBooking,
   lookupPnr,
   getProfile,
+  getWallet,
+  getWalletLedger,
   getMarkup,
   updateMarkup,
   getBranding,
@@ -26,9 +28,19 @@ router.post("/bookings/:id/confirm", confirmHold);
 router.post("/bookings/:id/cancel", cancelBooking);
 router.get("/bookings/pnr/:pnr", lookupPnr);
 router.get("/profile", getProfile);
+router.get("/wallet", getWallet);
+router.get("/wallet/ledger", getWalletLedger);
 router.get("/markup", getMarkup);
 router.patch("/markup", updateMarkup);
 router.get("/branding", getBranding);
-router.patch("/branding", mediaUpload.single("logo"), updateBranding);
+router.patch(
+  "/branding",
+  mediaUpload.fields([
+    { name: "logo", maxCount: 1 },
+    { name: "logoDark", maxCount: 1 },
+    { name: "favicon", maxCount: 1 },
+  ]),
+  updateBranding,
+);
 
 export default router;

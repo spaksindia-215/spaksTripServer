@@ -25,6 +25,15 @@ type SeedUser = {
   gst?: string;
   pan?: string;
   creditLimit?: number;
+  // Fixed white-label subdomain slug + branding for local testing. When set, the
+  // agent is reachable at `<slug>.localhost:3000`. We pin the slug instead of
+  // letting the pre-save hook random-suffix it so the test URL is predictable.
+  slug?: string;
+  branding?: {
+    companyName: string;
+    tagline?: string;
+    primaryColor: string;
+  };
 };
 
 const USERS: SeedUser[] = [
@@ -44,6 +53,12 @@ const USERS: SeedUser[] = [
     status: "active",
     aadhar: "123412341234",
     creditLimit: 50000,
+    slug: "demoagent",
+    branding: {
+      companyName: "Demo Agent Travels",
+      tagline: "Your journey, our promise",
+      primaryColor: "#0F766E",
+    },
   },
   {
     role: "b2b_agent",
@@ -55,6 +70,12 @@ const USERS: SeedUser[] = [
     gst: "22AAAAA0000A1Z5",
     pan: "ABCDE1234F",
     creditLimit: 100000,
+    slug: "demob2b",
+    branding: {
+      companyName: "Demo B2B Holidays",
+      tagline: "Wholesale fares, retail service",
+      primaryColor: "#B45309",
+    },
   },
   {
     role: "partner",
@@ -88,6 +109,11 @@ async function main(): Promise<void> {
           pan: u.pan,
           creditLimit: u.creditLimit ?? null,
           walletBalance: 0,
+          // Login gate: auth.controller blocks sign-in when emailVerified === false.
+          // findOneAndUpdate bypasses the schema default, so set it explicitly.
+          emailVerified: true,
+          ...(u.slug ? { slug: u.slug } : {}),
+          ...(u.branding ? { branding: u.branding } : {}),
         },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
@@ -95,10 +121,12 @@ async function main(): Promise<void> {
   }
 
   console.log("\n  Seeded dev accounts (password for all: " + PASSWORD + ")\n");
-  console.log("  Role        Phone (login)   Email");
-  console.log("  ──────────  ──────────────  ─────────────────────────");
+  console.log("  Login is by EMAIL, not phone.\n");
+  console.log("  Role        Email                      Subdomain (white-label)");
+  console.log("  ──────────  ─────────────────────────  ──────────────────────────");
   for (const u of USERS) {
-    console.log(`  ${u.role.padEnd(10)}  ${u.phone.padEnd(14)}  ${u.email}`);
+    const sub = u.slug ? `${u.slug}.localhost:3000` : "—";
+    console.log(`  ${u.role.padEnd(10)}  ${u.email.padEnd(25)}  ${sub}`);
   }
   console.log(
     "\n  Superadmin: no account — visit /superadmin and use the SUPERADMIN_PASSWORD env value.\n",

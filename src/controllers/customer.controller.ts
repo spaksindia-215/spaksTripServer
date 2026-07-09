@@ -44,6 +44,7 @@ export async function listEnquiries(req: Request, res: Response, next: NextFunct
     const filter: Record<string, unknown> = { customer: ownerId };
     const vertical = typeof req.query.vertical === "string" ? req.query.vertical : "";
     if (vertical && (SERVICE_VERTICALS as readonly string[]).includes(vertical)) filter.vertical = vertical;
+    // tenant-scope-ok: filter is seeded with { customer: ownerId } just above.
     const items = await ServiceEnquiryModel.find(filter)
       .sort({ createdAt: -1 })
       .populate("listing", "title slug images");

@@ -4,7 +4,11 @@ import { Schema, model, HydratedDocument } from "mongoose";
 export const ROLES = ["customer", "agent", "b2b_agent", "partner"] as const;
 export type Role = (typeof ROLES)[number];
 
-export const USER_STATUSES = ["active", "pending", "rejected"] as const;
+// "suspended" is distinct from "rejected": rejected only applies to a
+// still-pending application; suspended pulls down an agent that was already
+// live (policy violation, non-payment, etc.) without discarding their
+// account/history — reversible via unsuspend, unlike rejection.
+export const USER_STATUSES = ["active", "pending", "rejected", "suspended"] as const;
 export type UserStatus = (typeof USER_STATUSES)[number];
 
 export const MARKUP_TYPES = ["percent", "flat"] as const;
@@ -16,11 +20,28 @@ export interface MarkupRule {
   cap?: number;
 }
 
+// Curated font choices — mapped to web-safe CSS stacks client-side (no external
+// font loading, so no CSP/perf cost). Keep in sync with FONT_STACKS in globals.css.
+export const BRAND_FONTS = [
+  "default",
+  "classic-serif",
+  "modern-sans",
+  "geometric",
+  "humanist",
+] as const;
+export type BrandFont = (typeof BRAND_FONTS)[number];
+
 export interface IBranding {
   companyName?: string;
   tagline?: string;
   logo?: string;
+  // Optional dark-surface logo variant; falls back to `logo` when absent.
+  logoDark?: string;
+  // Optional favicon URL; falls back to `logo`, then the platform default.
+  favicon?: string;
   primaryColor: string;
+  // Curated font key; derived foreground/scale are computed on read, not stored.
+  fontKey?: BrandFont;
   contactEmail?: string;
   contactPhone?: string;
 }
@@ -57,6 +78,10 @@ export interface IUser {
   // Agent white-label fields — only populated for agent / b2b_agent roles.
   slug?: string;
   branding?: IBranding;
+  // Bumped by invalidateAgentCache() on every branding/markup/status change.
+  // Lets each server instance's in-process agent-config cache self-invalidate
+  // via a cheap single-field read, without a shared cache service (Redis).
+  configVersion: number;
   createdAt: Date;
 }
 
@@ -74,6 +99,8 @@ const brandingSchema = new Schema<IBranding>(
     companyName:  { type: String, trim: true, maxlength: 100 },
     tagline:      { type: String, trim: true, maxlength: 120 },
     logo:         { type: String, trim: true },
+    logoDark:     { type: String, trim: true },
+    favicon:      { type: String, trim: true },
     primaryColor: {
       type:     String,
       default:  "#185FA5",
@@ -82,6 +109,7 @@ const brandingSchema = new Schema<IBranding>(
         message:   "primaryColor must be a 6-digit hex color e.g. #185FA5",
       },
     },
+    fontKey:      { type: String, enum: BRAND_FONTS, default: "default" },
     contactEmail: { type: String, trim: true, lowercase: true },
     contactPhone: { type: String, trim: true },
   },
@@ -123,6 +151,7 @@ const userSchema = new Schema<IUser>(
       hotels:  { type: markupRuleSchema },
       taxi:    { type: markupRuleSchema },
     },
+    configVersion: { type: Number, required: true, default: 1 },
     slug: {
       type:      String,
       unique:    true,

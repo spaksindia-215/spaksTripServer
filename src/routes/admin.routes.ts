@@ -8,6 +8,10 @@ import {
   reject,
   listUsers,
   setCreditLimit,
+  getAgentWallet,
+  recordAgentWalletMovement,
+  suspendAgent,
+  unsuspendAgent,
   getNavbarSettings,
   updateNavbarSettings,
   getPlatformMarkup,
@@ -37,6 +41,14 @@ router.post("/approve/:id", adminSessionMiddleware, approve);
 router.post("/reject/:id", adminSessionMiddleware, reject);
 router.get("/users", adminSessionMiddleware, listUsers);
 router.patch("/users/:id/credit-limit", adminSessionMiddleware, setCreditLimit);
+// Suspend pulls a live agent's storefront offline (reversible); distinct from
+// reject, which only applies while the application is still pending.
+router.post("/users/:id/suspend", adminSessionMiddleware, suspendAgent);
+router.post("/users/:id/unsuspend", adminSessionMiddleware, unsuspendAgent);
+// Pre-funded wallet: superadmin records deposits (TOPUP) and corrections
+// (ADJUSTMENT, either sign) — audit note mandatory; ledger is append-only.
+router.get("/users/:id/wallet", adminSessionMiddleware, getAgentWallet);
+router.post("/users/:id/wallet", adminSessionMiddleware, recordAgentWalletMovement);
 
 // Partner hotel-listing review queue. Submitted listings land as "pending" and
 // only become "active" (publicly visible) once an admin approves here.
