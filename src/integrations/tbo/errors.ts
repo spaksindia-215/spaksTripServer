@@ -34,11 +34,25 @@ export class TboSeatUnavailableError extends TboError {
   }
 }
 
+// Raw TBO error envelope fields, preserved for diagnostics only (not used for control flow).
+export interface TboRawErrorDetails {
+  tboErrorCode?: number;
+  tboErrorMessage?: string;
+  traceId?: string;
+}
+
 // Booking submission failed — retry once before surfacing to user
 export class TboBookingFailedError extends TboError {
-  constructor(detail?: string) {
+  public readonly tboErrorCode?: number;
+  public readonly tboErrorMessage?: string;
+  public readonly traceId?: string;
+
+  constructor(detail?: string, rawDetails?: TboRawErrorDetails) {
     super(10004, detail ?? "Booking failed");
     this.name = "TboBookingFailedError";
+    this.tboErrorCode = rawDetails?.tboErrorCode;
+    this.tboErrorMessage = rawDetails?.tboErrorMessage;
+    this.traceId = rawDetails?.traceId;
   }
 }
 
