@@ -2,6 +2,6 @@
 /dist
 /uploads
 package-lock.json
-.env
-.env.local
+.env*
 *.log
+.env.example
