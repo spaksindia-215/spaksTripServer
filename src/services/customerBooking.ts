@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { BookingModel, type ProductType } from "../models/Booking";
+import { BookingModel, type ProductType, type BookingStatus } from "../models/Booking";
 import type { Role } from "../models/User";
 import type { AnyBookingDetails } from "../models/bookingDetails";
 
@@ -26,17 +26,20 @@ export interface RecordCustomerBookingInput {
   amount: number;
   currency?: string;
   details?: AnyBookingDetails;
+  // Defaults to "active". Hotel Hold bookings (voucher not yet generated) pass
+  // "held" so the dashboard can prompt the customer to generate their voucher.
+  status?: BookingStatus;
 }
 
 export async function recordCustomerBooking(input: RecordCustomerBookingInput): Promise<void> {
   try {
-    const { ownerId, ownerRole, claimEmail, productType, pnr, amount, currency, details } = input;
+    const { ownerId, ownerRole, claimEmail, productType, pnr, amount, currency, details, status } = input;
 
     if (typeof amount !== "number" || amount <= 0) return;
 
     const base = {
       productType,
-      status: "active" as const,
+      status: status ?? ("active" as const),
       pnr,
       amount,
       currency: currency ?? "INR",
