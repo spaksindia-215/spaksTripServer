@@ -22,6 +22,11 @@ export interface HotelBookingDetails {
   hotelCode?: string;
   roomName?: string;
   nights?: number;
+  // TBO's numeric BookingId — needed to link the dashboard card to
+  // /hotel/booking/[id] and to call GenerateVoucher for Hold bookings.
+  bookingId?: number;
+  // Mirrors the Book-time TBO flag: false = Hold (voucher not yet generated).
+  isVoucherBooking?: boolean;
 }
 
 export interface TaxiBookingDetails {

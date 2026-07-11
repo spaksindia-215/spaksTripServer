@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { getAgentConfig } from "../lib/agentCache";
 import { getPlatformConfig } from "../lib/platformConfig";
-import { BookingModel, PRODUCT_TYPES, type ProductType } from "../models/Booking";
+import { BookingModel, PRODUCT_TYPES, BOOKING_STATUSES, type ProductType, type BookingStatus } from "../models/Booking";
 import { HttpError } from "../middleware/error";
 import { resolveOptionalUser } from "../middleware/auth";
 import { recordCustomerBooking } from "../services/customerBooking";
@@ -152,13 +152,14 @@ router.post(
   "/record-customer-booking",
   async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { productType, pnr, amount, currency, claimEmail, details } = req.body as {
+      const { productType, pnr, amount, currency, claimEmail, details, status } = req.body as {
         productType?: string;
         pnr?: string;
         amount?: number;
         currency?: string;
         claimEmail?: string;
         details?: AnyBookingDetails;
+        status?: string;
       };
 
       if (!(PRODUCT_TYPES as readonly string[]).includes(String(productType))) {
@@ -166,6 +167,9 @@ router.post(
       }
       if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
         throw new HttpError(400, "amount must be a positive number");
+      }
+      if (status !== undefined && !(BOOKING_STATUSES as readonly string[]).includes(status)) {
+        throw new HttpError(400, `status must be one of: ${BOOKING_STATUSES.join(", ")}`);
       }
 
       // Prefer the authenticated customer (secure, cookie-derived); fall back to the
@@ -179,10 +183,39 @@ router.post(
         amount,
         currency,
         details,
+        status: status as BookingStatus | undefined,
         ...(owned ? { ownerId: user.sub, ownerRole: "customer" } : { claimEmail }),
       });
 
       res.status(202).json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// POST /api/internal/hotel-booking-vouchered
+// Called by the Next.js /api/hotels/voucher route immediately after TBO's
+// GenerateVoucher succeeds for a Hold booking. Flips the dashboard-facing
+// Booking record from "held" to "active" so the customer stops seeing the
+// "Generate Voucher" prompt. Best-effort from the caller's perspective — the
+// TBO voucher itself already succeeded by the time this is called.
+// Never add a Next.js proxy route — this must not be browser-reachable.
+router.post(
+  "/hotel-booking-vouchered",
+  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { bookingId } = req.body as { bookingId?: number };
+      if (typeof bookingId !== "number" || !Number.isFinite(bookingId)) {
+        throw new HttpError(400, "bookingId must be a number");
+      }
+
+      const result = await BookingModel.updateOne(
+        { productType: "hotel", status: "held", "details.bookingId": bookingId },
+        { $set: { status: "active" } },
+      );
+
+      res.json({ ok: true, updated: result.modifiedCount > 0 });
     } catch (err) {
       next(err);
     }
