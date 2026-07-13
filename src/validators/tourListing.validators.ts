@@ -48,6 +48,15 @@ function optNum(o: Record<string, unknown>, k: string): number | undefined {
   return v;
 }
 
+// Unlike optNum, coordinates may legitimately be negative (southern latitudes,
+// western longitudes) — international tours can have either.
+function optSignedNum(o: Record<string, unknown>, k: string): number | undefined {
+  if (o[k] === undefined || o[k] === null || o[k] === "") return undefined;
+  const v = typeof o[k] === "number" ? (o[k] as number) : Number(o[k]);
+  if (!Number.isFinite(v)) fail(`${k} must be a valid number`);
+  return v;
+}
+
 function bool(v: unknown, fallback: boolean): boolean {
   return typeof v === "boolean" ? v : fallback;
 }
@@ -115,14 +124,20 @@ export function validateTourListing(body: unknown): TourFields {
     .filter(isObject)
     .map((r) => {
       const it = r as Record<string, unknown>;
+      const stopLat = optSignedNum(it, "locationLat");
+      const stopLng = optSignedNum(it, "locationLng");
       return {
         time: optStr(it, "time"),
         title: optStr(it, "title"),
         description: optStr(it, "description"),
         location: optStr(it, "location"),
+        coordinates:
+          stopLat !== undefined && stopLng !== undefined
+            ? { type: "Point" as const, coordinates: [stopLng, stopLat] as [number, number] }
+            : undefined,
       };
     })
-    .filter((s) => s.time || s.title || s.description || s.location);
+    .filter((s) => s.time || s.title || s.description || s.location || s.coordinates);
 
   // Pickup points.
   const pickupRaw = Array.isArray(d.pickupPoints) ? (d.pickupPoints as unknown[]) : [];
@@ -140,8 +155,8 @@ export function validateTourListing(body: unknown): TourFields {
   );
 
   // Coordinates (only when both lat & lng present).
-  const latitude = optNum(d, "latitude");
-  const longitude = optNum(d, "longitude");
+  const latitude = optSignedNum(d, "latitude");
+  const longitude = optSignedNum(d, "longitude");
   const coordinates =
     latitude !== undefined && longitude !== undefined
       ? { type: "Point" as const, coordinates: [longitude, latitude] as [number, number] }

@@ -19,6 +19,12 @@ import { ImageSchema, type Image } from "./_shared/subdocs";
 // Stored in its own `tourpackages` collection, replacing the legacy
 // mixed-metadata `tour_package` PartnerResource.
 
+export interface TourPackageItineraryLocation {
+  lat: number;
+  lng: number;
+  address?: string;
+}
+
 export interface TourPackageItineraryDay {
   day: number;
   title?: string;
@@ -26,6 +32,9 @@ export interface TourPackageItineraryDay {
   meals: { breakfast: boolean; lunch: boolean; dinner: boolean };
   accommodation?: string;
   activities: string[];
+  // Pin-dropped location for this day (search/drag-pin in the UI); optional —
+  // older itinerary days may not have one.
+  location?: TourPackageItineraryLocation;
 }
 
 export interface TourPackageDiscount {
@@ -84,6 +93,15 @@ export interface ITourPackage {
   updatedAt: Date;
 }
 
+const itineraryLocationSchema = new Schema<TourPackageItineraryLocation>(
+  {
+    lat: { type: Number, required: [true, "location.lat is required"], min: -90, max: 90 },
+    lng: { type: Number, required: [true, "location.lng is required"], min: -180, max: 180 },
+    address: { type: String, trim: true },
+  },
+  { _id: false },
+);
+
 const itinerarySchema = new Schema<TourPackageItineraryDay>(
   {
     day: { type: Number, required: [true, "itinerary day is required"], min: [1, "day must be at least 1"] },
@@ -96,6 +114,7 @@ const itinerarySchema = new Schema<TourPackageItineraryDay>(
     },
     accommodation: { type: String, trim: true },
     activities: { type: [String], default: [] },
+    location: { type: itineraryLocationSchema, default: undefined },
   },
   { _id: false },
 );

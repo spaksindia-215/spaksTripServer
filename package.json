@@ -14,6 +14,8 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "verify:wallet": "tsx --env-file=.env scripts/wallet-invariants-check.ts",
     "guard:tenant-scope": "tsx scripts/tenant-scope-guard.ts",
+    "sync:markup-engine": "tsx scripts/sync-markup-engine.ts",
+    "guard:markup-sync": "tsx scripts/sync-markup-engine.ts --check",
     "seed:dev": "tsx --env-file=.env scripts/seed-dev-users.ts",
     "seed:demo": "tsx --env-file=.env scripts/seed-demo-partner.ts",
     "smoke:events": "tsx --env-file=.env scripts/events-smoke.ts",

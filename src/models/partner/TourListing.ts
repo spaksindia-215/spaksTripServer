@@ -22,6 +22,7 @@ export interface TourItineraryStop {
   title?: string;
   description?: string;
   location?: string;
+  coordinates?: GeoPoint;
 }
 
 export interface TourPricingTier {
@@ -80,6 +81,7 @@ const itinerarySchema = new Schema<TourItineraryStop>(
     title: { type: String, trim: true },
     description: { type: String, trim: true },
     location: { type: String, trim: true },
+    coordinates: { type: CoordinateSchema, default: undefined },
   },
   { _id: false },
 );

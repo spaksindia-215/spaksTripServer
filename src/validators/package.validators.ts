@@ -5,6 +5,12 @@ import {
   PACKAGE_SCOPES,
   CURRENCY_CODES,
   LISTING_REF_MODELS,
+  OPERATING_DAYS,
+  SIGHTSEEING_CATEGORIES,
+  SIGHTSEEING_DIFFICULTY,
+  SIGHTSEEING_PRICING_MODELS,
+  SIGHTSEEING_DURATION_UNITS,
+  SERVICE_CANCELLATION_POLICIES,
   type PackageKind,
   type PackageScope,
   type CurrencyCode,
@@ -137,6 +143,80 @@ function validateComponents(raw: unknown): PackageComponent[] {
   return out;
 }
 
+// Sightseeing-specific fields, kept under Package.specs so a template carries the
+// same field set as a partner SightseeingListing (see SightseeingListing.ts). Only
+// applied when kind === "sightseeing"; every other kind keeps the loose passthrough.
+function validateSightseeingSpecs(raw: unknown): Record<string, unknown> {
+  const o = isObject(raw) ? raw : {};
+  const location = isObject(o.location) ? o.location : {};
+  const meetingPoint = isObject(o.meetingPoint) ? o.meetingPoint : {};
+  const duration = isObject(o.duration) ? o.duration : {};
+  const ageRestriction = isObject(o.ageRestriction) ? o.ageRestriction : {};
+  const groupSize = isObject(o.groupSize) ? o.groupSize : {};
+  const pricing = isObject(o.pricing) ? o.pricing : {};
+
+  const availableDaysRaw = Array.isArray(o.availableDays) ? o.availableDays : [];
+  const availableDays = availableDaysRaw.filter(
+    (d): d is string => typeof d === "string" && (OPERATING_DAYS as readonly string[]).includes(d),
+  );
+
+  const blackoutDatesRaw = Array.isArray(o.blackoutDates) ? o.blackoutDates : [];
+  const blackoutDates = blackoutDatesRaw
+    .filter((d): d is string => typeof d === "string" && d.trim().length > 0)
+    .map((d) => d.trim());
+
+  return {
+    category: o.category !== undefined
+      ? inEnum("package.specs", SIGHTSEEING_CATEGORIES, o.category, "category")
+      : undefined,
+    location: {
+      island: optStr(location, "island"),
+      address: optStr(location, "address"),
+    },
+    meetingPoint: {
+      instructions: optStr(meetingPoint, "instructions"),
+    },
+    duration: {
+      value: optNum(duration, "value"),
+      unit: duration.unit !== undefined
+        ? inEnum("package.specs", SIGHTSEEING_DURATION_UNITS, duration.unit, "duration.unit")
+        : undefined,
+    },
+    difficulty: o.difficulty !== undefined
+      ? inEnum("package.specs", SIGHTSEEING_DIFFICULTY, o.difficulty, "difficulty")
+      : undefined,
+    ageRestriction: {
+      min: optNum(ageRestriction, "min"),
+      max: optNum(ageRestriction, "max"),
+    },
+    groupSize: {
+      min: optNum(groupSize, "min"),
+      max: optNum(groupSize, "max"),
+    },
+    whatToBring: strArr(o, "whatToBring"),
+    pricingModel: o.pricingModel !== undefined
+      ? inEnum("package.specs", SIGHTSEEING_PRICING_MODELS, o.pricingModel, "pricingModel")
+      : undefined,
+    pricing: {
+      adult: optNum(pricing, "adult"),
+      child: optNum(pricing, "child"),
+      infant: optNum(pricing, "infant"),
+      groupPrice: optNum(pricing, "groupPrice"),
+    },
+    availableDays,
+    timeSlots: strArr(o, "timeSlots"),
+    blackoutDates,
+    cancellationPolicy: o.cancellationPolicy !== undefined
+      ? inEnum("package.specs", SERVICE_CANCELLATION_POLICIES, o.cancellationPolicy, "cancellationPolicy")
+      : undefined,
+    bookingCutoffHours: optNum(o, "bookingCutoffHours"),
+    languages: strArr(o, "languages"),
+    accessibility: strArr(o, "accessibility"),
+    termsAndConditions: optStr(o, "termsAndConditions"),
+    videoUrl: optStr(o, "videoUrl"),
+  };
+}
+
 export function validatePackage(input: PackageRawInput): ValidatedPackage {
   const b = input.body;
   const kind = inEnum<PackageKind>("package", PACKAGE_KINDS, b.kind, "kind");
@@ -167,7 +247,7 @@ export function validatePackage(input: PackageRawInput): ValidatedPackage {
     components,
     inclusions: strArr(b, "inclusions"),
     exclusions: strArr(b, "exclusions"),
-    specs: isObject(b.specs) ? b.specs : {},
+    specs: kind === "sightseeing" ? validateSightseeingSpecs(b.specs) : isObject(b.specs) ? b.specs : {},
     referencePrice: optNum(b, "referencePrice"),
     currency,
     images,

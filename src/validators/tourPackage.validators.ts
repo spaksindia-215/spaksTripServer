@@ -71,6 +71,15 @@ function strArray(v: unknown): string[] {
   );
 }
 
+// Unlike optNum, coordinates may legitimately be negative (southern latitudes,
+// western longitudes) — international-scope packages can have either.
+function optSignedNum(o: Record<string, unknown>, k: string): number | undefined {
+  if (o[k] === undefined || o[k] === null || o[k] === "") return undefined;
+  const v = typeof o[k] === "number" ? (o[k] as number) : Number(o[k]);
+  if (!Number.isFinite(v)) fail(`${k} must be a valid number`);
+  return v;
+}
+
 function optDate(value: string | undefined, field: string): Date | undefined {
   if (!value) return undefined;
   const d = new Date(value);
@@ -110,13 +119,16 @@ export function validateTourPackage(body: unknown): ValidatedTourPackage {
   };
   if (route.durationDays < 1) fail("route.durationDays must be at least 1");
 
-  // Itinerary (day-wise with meals).
+  // Itinerary (day-wise with meals + an optional pin-dropped location).
   const itineraryRaw = Array.isArray(d.itinerary) ? (d.itinerary as unknown[]) : [];
   const itinerary = itineraryRaw
     .filter(isObject)
     .map((r, i) => {
       const it = r as Record<string, unknown>;
       const meals = isObject(it.meals) ? (it.meals as Record<string, unknown>) : {};
+      const locRaw = isObject(it.location) ? (it.location as Record<string, unknown>) : undefined;
+      const lat = locRaw ? optSignedNum(locRaw, "lat") : undefined;
+      const lng = locRaw ? optSignedNum(locRaw, "lng") : undefined;
       return {
         day: optNum(it, "day") ?? i + 1,
         title: optStr(it, "title"),
@@ -128,6 +140,7 @@ export function validateTourPackage(body: unknown): ValidatedTourPackage {
         },
         accommodation: optStr(it, "accommodation"),
         activities: strArray(it.activities),
+        location: lat !== undefined && lng !== undefined ? { lat, lng, address: optStr(locRaw!, "address") } : undefined,
       };
     });
 
