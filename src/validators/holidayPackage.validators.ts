@@ -4,30 +4,31 @@ import {
   RESOURCE_STATUS,
   PACKAGE_TYPES,
   DEPARTURE_STATUS,
-  DIFFICULTY_LEVELS,
+  HOLIDAY_ROOM_TYPES,
+  HOLIDAY_MEAL_PLANS,
   INDIAN_STATES,
   type CurrencyCode,
   type DepartureStatus,
 } from "../models/partner/_shared/enums";
-import type { ITourPackage } from "../models/partner/TourPackage";
+import type { IHolidayPackage } from "../models/partner/HolidayPackage";
 
-// Validates the dedicated TourPackage form payload (structured JSON). The
+// Validates the dedicated HolidayPackage form payload (structured JSON). The
 // controller resolves `includes` (cross-model ownership) and `images`/
-// `thumbnail` (Cloudinary URLs), so those are excluded here. The raw include ids
-// are returned separately for the controller to validate + attach.
+// `thumbnail` (Cloudinary URLs), so those are excluded here. Mirrors
+// tourPackage.validators.ts — the room-tier block is the only real difference.
 
-export type TourPackageFields = Omit<
-  ITourPackage,
+export type HolidayPackageFields = Omit<
+  IHolidayPackage,
   "partner" | "slug" | "createdAt" | "updatedAt" | "includes" | "images" | "thumbnail"
 >;
 
-export interface ValidatedTourPackage {
-  fields: TourPackageFields;
+export interface ValidatedHolidayPackage {
+  fields: HolidayPackageFields;
   includeIds: { taxi?: string; hotels: string[]; tours: string[] };
 }
 
 function fail(msg: string): never {
-  throw new HttpError(400, `tour package: ${msg}`);
+  throw new HttpError(400, `holiday package: ${msg}`);
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -81,13 +82,6 @@ function optSignedNum(o: Record<string, unknown>, k: string): number | undefined
   return v;
 }
 
-function optState(o: Record<string, unknown>, k: string): TourPackageFields["state"] {
-  const v = optStr(o, k);
-  if (v === undefined) return undefined;
-  if (!(INDIAN_STATES as readonly string[]).includes(v)) fail(`${k} must be one of the listed Indian states/UTs`);
-  return v as TourPackageFields["state"];
-}
-
 function optDate(value: string | undefined, field: string): Date | undefined {
   if (!value) return undefined;
   const d = new Date(value);
@@ -95,18 +89,35 @@ function optDate(value: string | undefined, field: string): Date | undefined {
   return d;
 }
 
-export function validateTourPackage(body: unknown): ValidatedTourPackage {
+function optState(o: Record<string, unknown>, k: string): HolidayPackageFields["state"] {
+  const v = optStr(o, k);
+  if (v === undefined) return undefined;
+  if (!(INDIAN_STATES as readonly string[]).includes(v)) fail(`${k} must be one of the listed Indian states/UTs`);
+  return v as HolidayPackageFields["state"];
+}
+
+// Parses an optional {lat, lng, address?} pin (route origin/destination) — same
+// shape as an itinerary day's location.
+function optLocation(raw: unknown): { lat: number; lng: number; address?: string } | undefined {
+  if (!isObject(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const lat = optSignedNum(o, "lat");
+  const lng = optSignedNum(o, "lng");
+  return lat !== undefined && lng !== undefined ? { lat, lng, address: optStr(o, "address") } : undefined;
+}
+
+export function validateHolidayPackage(body: unknown): ValidatedHolidayPackage {
   if (!isObject(body)) fail("request body is required");
   const d = body as Record<string, unknown>;
 
   // Status.
-  let status: TourPackageFields["status"] = "draft";
+  let status: HolidayPackageFields["status"] = "draft";
   if (d.status !== undefined) {
     const s = String(d.status);
     if (!(RESOURCE_STATUS as readonly string[]).includes(s)) {
       fail(`status must be one of: ${RESOURCE_STATUS.join(", ")}`);
     }
-    status = s as TourPackageFields["status"];
+    status = s as HolidayPackageFields["status"];
   }
 
   // Package type.
@@ -121,7 +132,9 @@ export function validateTourPackage(body: unknown): ValidatedTourPackage {
   if (destinations.length === 0) fail("at least one destination is required");
   const route = {
     origin: optStr(routeRaw, "origin"),
+    originLocation: optLocation(routeRaw.originLocation),
     destinations,
+    destinationLocation: optLocation(routeRaw.destinationLocation),
     durationDays: reqNum(routeRaw, "durationDays"),
     durationNights: reqNum(routeRaw, "durationNights"),
   };
@@ -152,13 +165,37 @@ export function validateTourPackage(body: unknown): ValidatedTourPackage {
       };
     });
 
-  // Pricing + discounts.
-  const pricingRaw = isObject(d.pricing) ? (d.pricing as Record<string, unknown>) : {};
-  const currency = String(pricingRaw.currency ?? "INR");
+  // Room tiers (≥1) — the room-category × meal-plan price rows.
+  const currency = String(d.currency ?? "INR");
   if (!(CURRENCY_CODES as readonly string[]).includes(currency)) {
-    fail(`pricing.currency must be one of: ${CURRENCY_CODES.join(", ")}`);
+    fail(`currency must be one of: ${CURRENCY_CODES.join(", ")}`);
   }
-  const discountsRaw = Array.isArray(pricingRaw.discounts) ? (pricingRaw.discounts as unknown[]) : [];
+  const roomTiersRaw = Array.isArray(d.roomTiers) ? (d.roomTiers as unknown[]) : [];
+  const roomTiers = roomTiersRaw
+    .filter(isObject)
+    .map((r) => {
+      const rt = r as Record<string, unknown>;
+      const roomType = reqStr(rt, "roomType");
+      if (!(HOLIDAY_ROOM_TYPES as readonly string[]).includes(roomType)) {
+        fail(`roomTier.roomType must be one of: ${HOLIDAY_ROOM_TYPES.join(", ")}`);
+      }
+      const mealPlan = String(rt.mealPlan ?? "breakfast");
+      if (!(HOLIDAY_MEAL_PLANS as readonly string[]).includes(mealPlan)) {
+        fail(`roomTier.mealPlan must be one of: ${HOLIDAY_MEAL_PLANS.join(", ")}`);
+      }
+      return {
+        roomType: roomType as HolidayPackageFields["roomTiers"][number]["roomType"],
+        mealPlan: mealPlan as HolidayPackageFields["roomTiers"][number]["mealPlan"],
+        price: reqNum(rt, "price"),
+        maxOccupancy: optNum(rt, "maxOccupancy") ?? 2,
+        childPrice: optNum(rt, "childPrice"),
+        extraBedPrice: optNum(rt, "extraBedPrice"),
+      };
+    });
+  if (roomTiers.length === 0) fail("at least one room tier is required");
+
+  // Discounts.
+  const discountsRaw = Array.isArray(d.discounts) ? (d.discounts as unknown[]) : [];
   const discounts = discountsRaw
     .filter(isObject)
     .map((r) => {
@@ -171,17 +208,6 @@ export function validateTourPackage(body: unknown): ValidatedTourPackage {
         validUntil: optDate(optStr(dc, "validUntil"), "discount.validUntil"),
       };
     });
-  const pricing = {
-    basePrice: reqNum(pricingRaw, "basePrice"),
-    currency: currency as CurrencyCode,
-    perPerson: bool(pricingRaw.perPerson, true),
-    maxPersons: optNum(pricingRaw, "maxPersons"),
-    childPrice: optNum(pricingRaw, "childPrice"),
-    infantPrice: optNum(pricingRaw, "infantPrice") ?? 0,
-    extraPersonCharge: optNum(pricingRaw, "extraPersonCharge"),
-    singleSupplement: optNum(pricingRaw, "singleSupplement"),
-    discounts,
-  };
 
   // Departures.
   const departuresRaw = Array.isArray(d.departures) ? (d.departures as unknown[]) : [];
@@ -203,32 +229,24 @@ export function validateTourPackage(body: unknown): ValidatedTourPackage {
       };
     });
 
-  // Difficulty (optional).
-  let difficultyLevel: TourPackageFields["difficultyLevel"];
-  const diffRaw = optStr(d, "difficultyLevel");
-  if (diffRaw) {
-    if (!(DIFFICULTY_LEVELS as readonly string[]).includes(diffRaw)) {
-      fail(`difficultyLevel must be one of: ${DIFFICULTY_LEVELS.join(", ")}`);
-    }
-    difficultyLevel = diffRaw as TourPackageFields["difficultyLevel"];
-  }
-
-  const fields: TourPackageFields = {
+  const fields: HolidayPackageFields = {
     status,
     title: reqStr(d, "title"),
-    packageType: packageType as TourPackageFields["packageType"],
+    packageType: packageType as HolidayPackageFields["packageType"],
     state: optState(d, "state"),
     route,
     customInclusions: strArray(d.customInclusions),
     exclusions: strArray(d.exclusions),
     itinerary,
-    pricing,
+    roomTiers,
+    currency: currency as CurrencyCode,
+    singleSupplement: optNum(d, "singleSupplement"),
+    discounts,
     departures,
     videoUrl: optStr(d, "videoUrl"),
     description: optStr(d, "description"),
     highlights: strArray(d.highlights),
     tags: strArray(d.tags),
-    difficultyLevel,
   };
 
   // Include refs (validated for ownership in the controller).

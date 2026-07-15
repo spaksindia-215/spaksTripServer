@@ -6,12 +6,14 @@ import {
   PACKAGE_ORIGINS,
   CURRENCY_CODES,
   LISTING_REF_MODELS,
+  INDIAN_STATES,
   type ResourceStatus,
   type PackageKind,
   type PackageScope,
   type PackageOrigin,
   type CurrencyCode,
   type ListingRefModel,
+  type IndianState,
 } from "./_shared/enums";
 import { ImageSchema, type Image } from "./_shared/subdocs";
 import { attachSlug } from "./_shared/schemaHelpers";
@@ -65,6 +67,9 @@ export interface IPackage {
   description?: string;
   highlights: string[];
   tags: string[];
+  // Indian state this listing operates in — drives state-wise browse categories.
+  // Domestic-only; left unset for international-scope listings.
+  state?: IndianState;
   route: PackageRoute;
   itinerary: PackageItineraryDay[];
   components: PackageComponent[]; // populated only for kind "bundle"
@@ -123,6 +128,7 @@ const packageSchema = new Schema<IPackage>(
     description: { type: String, maxlength: [4000, "description cannot exceed 4000 chars"], trim: true },
     highlights: { type: [String], default: [] },
     tags: { type: [String], default: [] },
+    state: { type: String, enum: INDIAN_STATES, index: true },
     route: {
       origin: { type: String, trim: true },
       destinations: { type: [String], default: [] },
@@ -142,6 +148,7 @@ const packageSchema = new Schema<IPackage>(
 
 // ── Indexes ──────────────────────────────────────────────────────────────────
 packageSchema.index({ kind: 1, scope: 1, status: 1 });
+packageSchema.index({ kind: 1, state: 1, status: 1 });
 packageSchema.index({ origin: 1, status: 1 });
 packageSchema.index({ author: 1, status: 1 });
 packageSchema.index({ title: "text", "route.destinations": "text", tags: "text" });

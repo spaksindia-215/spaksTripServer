@@ -7,6 +7,7 @@ import { TaxiListingModel } from "../models/partner/TaxiListing";
 import { TaxiPackageModel } from "../models/partner/TaxiPackage";
 import { TourListingModel } from "../models/partner/TourListing";
 import { TourPackageModel } from "../models/partner/TourPackage";
+import { HolidayPackageModel } from "../models/partner/HolidayPackage";
 import { CruiseListingModel } from "../models/partner/CruiseListing";
 import {
   validateResourceCreate,
@@ -22,6 +23,7 @@ import {
 import { validateTaxiPackage } from "../validators/taxiPackage.validators";
 import { validateTourListing } from "../validators/tourListing.validators";
 import { validateTourPackage } from "../validators/tourPackage.validators";
+import { validateHolidayPackage } from "../validators/holidayPackage.validators";
 import { validateCruiseListing } from "../validators/cruiseListing.validators";
 import { uploadToCloudinary, uploadManyToCloudinary } from "../lib/cloudinary";
 import { HttpError } from "../middleware/error";
@@ -779,6 +781,116 @@ export async function deleteTourPackage(
     const id = paramId(req);
     const result = await TourPackageModel.findOneAndDelete({ _id: id, partner: partnerId });
     if (!result) throw new HttpError(404, "Tour package not found");
+    res.status(204).end();
+  } catch (e) {
+    next(e);
+  }
+}
+
+// ── Holiday Packages ─────────────────────────────────────────────────────────
+// Same shape as TourPackage; the only structural difference is room-tier pricing
+// (roomTiers[]) instead of a flat price. See HolidayPackage.ts.
+
+async function uploadHolidayPackageMedia(
+  files: Express.Multer.File[],
+): Promise<{ thumbnail?: string; imageUrls: string[] }> {
+  const thumbFile = files.find((f) => f.fieldname === "thumbnail");
+  const thumbnail = thumbFile ? await uploadToCloudinary(thumbFile, "spakstrip/holiday-packages") : undefined;
+  const imageUrls = await uploadManyToCloudinary(
+    files.filter((f) => f.fieldname === "images"),
+    "spakstrip/holiday-packages",
+  );
+  return { thumbnail, imageUrls };
+}
+
+// POST /api/partner/holiday-packages — multipart: `payload` JSON + thumbnail + images.
+export async function createHolidayPackage(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const partnerId = partnerIdFrom(req);
+    const payload = parseJsonField(req, "payload", req.body);
+    const { fields, includeIds } = validateHolidayPackage(payload);
+
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const { thumbnail, imageUrls } = await uploadHolidayPackageMedia(files);
+    const includes = await resolveTourPackageIncludes(partnerId, includeIds);
+
+    const doc = await HolidayPackageModel.create({
+      ...fields,
+      partner: partnerId,
+      status: "pending",
+      includes,
+      thumbnail,
+      images: imageUrls.map((url, i) => ({ url, isPrimary: i === 0 })),
+    });
+    res.status(201).json({ item: doc.toJSON() });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// GET /api/partner/holiday-packages
+export async function listHolidayPackages(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const partnerId = partnerIdFrom(req);
+    const items = await HolidayPackageModel.find({ partner: partnerId }).sort({ createdAt: -1 });
+    res.json({ items: items.map((i) => i.toJSON()) });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// PATCH /api/partner/holiday-packages/:id — multipart; the edit form resends the
+// full payload. New thumbnail/images replace existing ones only when provided.
+export async function updateHolidayPackage(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const partnerId = partnerIdFrom(req);
+    const id = paramId(req);
+    const payload = parseJsonField(req, "payload", req.body);
+    const { fields, includeIds } = validateHolidayPackage(payload);
+
+    const doc = await HolidayPackageModel.findOne({ _id: id, partner: partnerId });
+    if (!doc) throw new HttpError(404, "Holiday package not found");
+
+    const prevStatus = doc.status; // a field edit never changes approval state (§2.3)
+    doc.set(fields);
+    doc.status = prevStatus; // publishing goes through submit → admin approval, not this edit
+    doc.includes = await resolveTourPackageIncludes(partnerId, includeIds);
+
+    const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+    const { thumbnail, imageUrls } = await uploadHolidayPackageMedia(files);
+    if (thumbnail) doc.thumbnail = thumbnail;
+    if (imageUrls.length > 0) doc.images = imageUrls.map((url, i) => ({ url, isPrimary: i === 0 }));
+
+    await doc.save();
+    res.json({ item: doc.toJSON() });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// DELETE /api/partner/holiday-packages/:id
+export async function deleteHolidayPackage(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  try {
+    const partnerId = partnerIdFrom(req);
+    const id = paramId(req);
+    const result = await HolidayPackageModel.findOneAndDelete({ _id: id, partner: partnerId });
+    if (!result) throw new HttpError(404, "Holiday package not found");
     res.status(204).end();
   } catch (e) {
     next(e);

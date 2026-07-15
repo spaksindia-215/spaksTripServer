@@ -22,6 +22,7 @@ import {
   PACKAGE_KINDS,
   PACKAGE_SCOPES,
   ENQUIRY_STATUS,
+  INDIAN_STATES,
   type ResourceStatus,
   type EnquiryStatus,
   type ListingRefModel,
@@ -276,6 +277,135 @@ export async function partnerListMyServices(req: Request, res: Response, next: N
   }
 }
 
+// ── Holiday tie-ups (hotel + taxi package → holiday package) ────────────────────
+// A partner's own hotel and an (often different partner's) taxi package that both
+// serve the same city can be tied together into a single, sellable "holiday"
+// Package — components snapshot both real listings (see LISTING_REF_MODELS
+// gaining "Package"), and the price is auto-computed from each side's own price
+// so no extra pricing step is needed. Like every partner-authored package it still
+// starts "pending" and needs admin approval (see partnerCreatePackage) — the
+// hotel partner doesn't need the taxi operator's consent, but does need the
+// platform's, same as any other listing.
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// GET /api/partner/packages/holiday-matches/:hotelId — active taxi packages whose
+// route touches this hotel's city, for the "tie this hotel into a holiday package"
+// prompt on the partner's hotel list.
+export async function partnerHolidayMatches(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const partnerId = userIdFrom(req);
+    const hotelId = paramStr(req.params.hotelId);
+    ensureValidId(hotelId);
+    const hotel = await HotelListingModel.findOne({ _id: hotelId, partner: partnerId });
+    if (!hotel) throw new HttpError(404, "Hotel not found");
+    const city = hotel.address?.city?.trim();
+    if (!city) {
+      res.json({ items: [], city: null });
+      return;
+    }
+    const cityRe = new RegExp(escapeRegex(city), "i");
+    const packages = await PackageModel.find({
+      kind: "taxi_package",
+      status: "active",
+      $or: [{ "route.origin": cityRe }, { "route.destinations": cityRe }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(20);
+    res.json({ items: await withOfferStats(packages), city });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// POST /api/partner/packages/holiday-tie-up — create (or reuse) the holiday
+// Package combining `hotelId` (must belong to this partner, must be active) with
+// `taxiPackageId` (any active taxi_package, any partner).
+export async function partnerCreateHolidayTieUp(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const partnerId = userIdFrom(req);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const hotelId = typeof body.hotelId === "string" ? body.hotelId : "";
+    const taxiPackageId = typeof body.taxiPackageId === "string" ? body.taxiPackageId : "";
+    ensureValidId(hotelId);
+    ensureValidId(taxiPackageId);
+
+    const hotel = await HotelListingModel.findOne({ _id: hotelId, partner: partnerId });
+    if (!hotel) throw new HttpError(404, "Hotel not found");
+    if (hotel.status !== "active") throw new HttpError(409, "This hotel must be active before it can be tied into a holiday package");
+
+    const taxiPackage = await PackageModel.findOne({ _id: taxiPackageId, kind: "taxi_package", status: "active" });
+    if (!taxiPackage) throw new HttpError(404, "Taxi package not found");
+
+    // Idempotent: re-tying the same pair returns the existing holiday package
+    // instead of creating a duplicate.
+    const existing = await PackageModel.findOne({
+      kind: "holiday",
+      author: partnerId,
+      components: {
+        $all: [
+          { $elemMatch: { refModel: "HotelListing", ref: hotel._id } },
+          { $elemMatch: { refModel: "Package", ref: taxiPackage._id } },
+        ],
+      },
+    });
+    if (existing) {
+      res.status(200).json({ item: existing.toJSON(), reused: true });
+      return;
+    }
+
+    const nights = taxiPackage.route.durationNights || 1;
+    const offerStats = await PackageOfferModel.aggregate<{ _id: Types.ObjectId; fromPrice: number }>([
+      { $match: { package: taxiPackage._id, status: "active" } },
+      { $group: { _id: "$package", fromPrice: { $min: "$price" } } },
+    ]);
+    const taxiFromPrice = offerStats[0]?.fromPrice;
+    if (taxiFromPrice == null) {
+      throw new HttpError(409, "This taxi package has no active operator price yet — it can't be priced into a holiday package until one is set.");
+    }
+
+    const combinedPrice = hotel.pricing.basePricePerNight * nights + taxiFromPrice;
+    const currency = hotel.pricing.currency ?? taxiPackage.currency;
+
+    const doc = await PackageModel.create({
+      kind: "holiday",
+      scope: taxiPackage.scope,
+      origin: "partner",
+      author: partnerId,
+      // Every partner-authored package starts pending admin approval — see
+      // partnerCreatePackage; holiday tie-ups are no exception.
+      status: "pending",
+      title: `${hotel.name} + ${taxiPackage.title}`,
+      description: `A complete holiday package combining a ${nights}-night stay at ${hotel.name} with the "${taxiPackage.title}" taxi package.`,
+      state: taxiPackage.state,
+      images: hotel.images.length > 0 ? hotel.images.slice(0, 1) : taxiPackage.images,
+      thumbnail: hotel.images[0]?.url ?? taxiPackage.thumbnail,
+      route: taxiPackage.route,
+      inclusions: [`${nights} night${nights === 1 ? "" : "s"} stay at ${hotel.name}`, `Taxi package: ${taxiPackage.title}`],
+      currency,
+      referencePrice: combinedPrice,
+      components: [
+        { category: "Stay", refModel: "HotelListing", ref: hotel._id, title: hotel.name, quantity: nights, included: true },
+        { category: "Transport", refModel: "Package", ref: taxiPackage._id, title: taxiPackage.title, quantity: 1, included: true },
+      ],
+    });
+
+    const offerInput = validateOffer({
+      price: combinedPrice,
+      currency,
+      perPerson: false,
+      pricingNote: "Auto-priced: hotel stay + taxi package",
+    });
+    await PackageOfferModel.create({ ...offerInput, package: doc._id, partner: partnerId });
+
+    res.status(201).json({ item: doc.toJSON() });
+  } catch (e) {
+    next(e);
+  }
+}
+
 // ── Offers ─────────────────────────────────────────────────────────────────────
 
 // POST /api/partner/packages/offers — create or update this partner's offer on a
@@ -410,6 +540,7 @@ export async function publicListPackages(req: Request, res: Response, next: Next
     if (typeof q.destination === "string" && q.destination.trim()) {
       filter["route.destinations"] = new RegExp(q.destination.trim(), "i");
     }
+    if (typeof q.state === "string" && (INDIAN_STATES as readonly string[]).includes(q.state)) filter.state = q.state;
     if (typeof q.q === "string" && q.q.trim()) filter.$text = { $search: q.q.trim() };
 
     const { page, limit, skip } = paginate(q);

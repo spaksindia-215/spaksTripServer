@@ -12,6 +12,8 @@ import {
   partnerSetPackageStatus,
   partnerBrowseCatalog,
   partnerListMyServices,
+  partnerHolidayMatches,
+  partnerCreateHolidayTieUp,
   partnerUpsertOffer,
   partnerListOffers,
   partnerUpdateOffer,
@@ -42,6 +44,10 @@ router.get("/catalog", partnerBrowseCatalog);
 
 // The partner's own listings across every vertical — component source for bundles.
 router.get("/my-services", partnerListMyServices);
+
+// Holiday tie-ups — hotel + taxi package → one sellable holiday package.
+router.get("/holiday-matches/:hotelId", partnerHolidayMatches);
+router.post("/holiday-tie-up", partnerCreateHolidayTieUp);
 
 // Offers (JSON; no files). Declared before the `/:id` package routes.
 router.get("/offers", partnerListOffers);

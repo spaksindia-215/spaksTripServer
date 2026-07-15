@@ -11,6 +11,7 @@ import {
   SIGHTSEEING_PRICING_MODELS,
   SIGHTSEEING_DURATION_UNITS,
   SERVICE_CANCELLATION_POLICIES,
+  INDIAN_STATES,
   type PackageKind,
   type PackageScope,
   type CurrencyCode,
@@ -70,6 +71,7 @@ export type ValidatedPackage = Pick<
   | "description"
   | "highlights"
   | "tags"
+  | "state"
   | "route"
   | "itinerary"
   | "components"
@@ -234,6 +236,9 @@ export function validatePackage(input: PackageRawInput): ValidatedPackage {
 
   const images = input.imageUrls.map((url, i) => ({ url, isPrimary: i === 0 }));
 
+  const stateRaw = optStr(b, "state");
+  const state = stateRaw !== undefined ? inEnum("package", INDIAN_STATES, stateRaw, "state") : undefined;
+
   return {
     kind,
     scope,
@@ -242,6 +247,7 @@ export function validatePackage(input: PackageRawInput): ValidatedPackage {
     description: optStr(b, "description"),
     highlights: strArr(b, "highlights"),
     tags: strArr(b, "tags"),
+    state,
     route: validateRoute(b.route),
     itinerary: validateItinerary(b.itinerary),
     components,

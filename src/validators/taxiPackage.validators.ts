@@ -1,5 +1,5 @@
 import { HttpError } from "../middleware/error";
-import { CURRENCY_CODES, RESOURCE_STATUS } from "../models/partner/_shared/enums";
+import { CURRENCY_CODES, RESOURCE_STATUS, INDIAN_STATES } from "../models/partner/_shared/enums";
 import type { ITaxiPackage } from "../models/partner/TaxiPackage";
 
 // Validates the dedicated TaxiPackage form payload (structured JSON). The
@@ -62,6 +62,22 @@ function strArray(v: unknown): string[] {
   );
 }
 
+function optState(o: Record<string, unknown>, k: string): TaxiPackageFields["state"] {
+  const v = optStr(o, k);
+  if (v === undefined) return undefined;
+  if (!(INDIAN_STATES as readonly string[]).includes(v)) fail(`${k} must be one of the listed Indian states/UTs`);
+  return v as TaxiPackageFields["state"];
+}
+
+// Unlike optNum, coordinates may legitimately be negative (southern latitudes,
+// western longitudes) — international-scope packages can have either.
+function optSignedNum(o: Record<string, unknown>, k: string): number | undefined {
+  if (o[k] === undefined || o[k] === null || o[k] === "") return undefined;
+  const v = typeof o[k] === "number" ? (o[k] as number) : Number(o[k]);
+  if (!Number.isFinite(v)) fail(`${k} must be a valid number`);
+  return v;
+}
+
 function dateArray(v: unknown, field: string): Date[] {
   const raw = strArray(v);
   return raw.map((s) => {
@@ -89,8 +105,17 @@ export function validateTaxiPackage(body: unknown): ValidatedTaxiPackage {
   const routeRaw = isObject(d.route) ? (d.route as Record<string, unknown>) : {};
   const destinations = strArray(routeRaw.destinations);
   if (destinations.length === 0) fail("at least one destination is required");
+  const originLocRaw = isObject(routeRaw.originLocation)
+    ? (routeRaw.originLocation as Record<string, unknown>)
+    : undefined;
+  const originLat = originLocRaw ? optSignedNum(originLocRaw, "lat") : undefined;
+  const originLng = originLocRaw ? optSignedNum(originLocRaw, "lng") : undefined;
   const route = {
     origin: reqStr(routeRaw, "origin"),
+    originLocation:
+      originLat !== undefined && originLng !== undefined
+        ? { lat: originLat, lng: originLng, address: optStr(originLocRaw!, "address") }
+        : undefined,
     destinations,
     totalKm: optNum(routeRaw, "totalKm"),
     durationDays: reqNum(routeRaw, "durationDays"),
@@ -98,11 +123,14 @@ export function validateTaxiPackage(body: unknown): ValidatedTaxiPackage {
   };
   if (route.durationDays < 1) fail("route.durationDays must be at least 1");
 
-  // Itinerary.
+  // Itinerary (day-wise with an optional pin-dropped location).
   const itineraryRaw = Array.isArray(d.itinerary) ? (d.itinerary as unknown[]) : [];
   const itinerary = itineraryRaw.map((r, i) => {
     if (!isObject(r)) fail(`itinerary[${i}] must be an object`);
     const it = r as Record<string, unknown>;
+    const locRaw = isObject(it.location) ? (it.location as Record<string, unknown>) : undefined;
+    const lat = locRaw ? optSignedNum(locRaw, "lat") : undefined;
+    const lng = locRaw ? optSignedNum(locRaw, "lng") : undefined;
     return {
       day: optNum(it, "day") ?? i + 1,
       title: optStr(it, "title"),
@@ -110,6 +138,7 @@ export function validateTaxiPackage(body: unknown): ValidatedTaxiPackage {
       activities: strArray(it.activities),
       distance: optNum(it, "distance"),
       overnight: optStr(it, "overnight"),
+      location: lat !== undefined && lng !== undefined ? { lat, lng, address: optStr(locRaw!, "address") } : undefined,
     };
   });
 
@@ -132,6 +161,7 @@ export function validateTaxiPackage(body: unknown): ValidatedTaxiPackage {
   const fields: TaxiPackageFields = {
     status,
     title: reqStr(d, "title"),
+    state: optState(d, "state"),
     route,
     itinerary,
     pricing,

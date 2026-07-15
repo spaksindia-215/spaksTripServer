@@ -5,10 +5,12 @@ import {
   CURRENCY_CODES,
   TOUR_CATEGORIES,
   OPERATING_DAYS,
+  INDIAN_STATES,
   type ResourceStatus,
   type CurrencyCode,
   type TourCategory,
   type OperatingDay,
+  type IndianState,
 } from "./_shared/enums";
 import { ImageSchema, CoordinateSchema, type Image, type GeoPoint } from "./_shared/subdocs";
 
@@ -47,6 +49,7 @@ export interface ITourListing {
   category: TourCategory;
   basedIn: string;
   coversCities: string[];
+  state?: IndianState;
   coordinates?: GeoPoint;
   durationHours?: number;
   durationDays?: number;
@@ -120,6 +123,7 @@ const tourListingSchema = new Schema<ITourListing>(
     category: { type: String, enum: TOUR_CATEGORIES, required: [true, "category is required"] },
     basedIn: { type: String, required: [true, "basedIn is required"], trim: true },
     coversCities: { type: [String], default: [] },
+    state: { type: String, enum: INDIAN_STATES, index: true },
     coordinates: { type: CoordinateSchema, default: undefined },
     durationHours: { type: Number, min: [0, "durationHours cannot be negative"] },
     durationDays: { type: Number, min: [0, "durationDays cannot be negative"] },

@@ -4,6 +4,7 @@ import {
   RESOURCE_STATUS,
   TOUR_CATEGORIES,
   OPERATING_DAYS,
+  INDIAN_STATES,
   type CurrencyCode,
   type OperatingDay,
 } from "../models/partner/_shared/enums";
@@ -33,6 +34,13 @@ function reqStr(o: Record<string, unknown>, k: string): string {
 
 function optStr(o: Record<string, unknown>, k: string): string | undefined {
   return typeof o[k] === "string" && (o[k] as string).trim() ? (o[k] as string).trim() : undefined;
+}
+
+function optState(o: Record<string, unknown>, k: string): TourFields["state"] {
+  const v = optStr(o, k);
+  if (v === undefined) return undefined;
+  if (!(INDIAN_STATES as readonly string[]).includes(v)) fail(`${k} must be one of the listed Indian states/UTs`);
+  return v as TourFields["state"];
 }
 
 function reqNum(o: Record<string, unknown>, k: string): number {
@@ -168,6 +176,7 @@ export function validateTourListing(body: unknown): TourFields {
     category: category as TourFields["category"],
     basedIn: reqStr(d, "basedIn"),
     coversCities: strArray(d.coversCities),
+    state: optState(d, "state"),
     coordinates,
     durationHours: optNum(d, "durationHours"),
     durationDays: optNum(d, "durationDays"),

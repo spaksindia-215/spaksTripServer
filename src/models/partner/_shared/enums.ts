@@ -12,6 +12,50 @@ export type ResourceStatus = (typeof RESOURCE_STATUS)[number];
 export const CURRENCY_CODES = ["INR", "USD", "EUR", "AED", "GBP"] as const;
 export type CurrencyCode = (typeof CURRENCY_CODES)[number];
 
+// All 28 states + 8 union territories — powers the "state" field on domestic
+// itinerary-bearing listings (tour, tour_package, taxi_package, holiday), which in
+// turn drives state-wise browse categories. Optional everywhere it's used: an
+// international-scope listing, or one whose partner hasn't set it yet, has none.
+export const INDIAN_STATES = [
+  "Andhra Pradesh",
+  "Arunachal Pradesh",
+  "Assam",
+  "Bihar",
+  "Chhattisgarh",
+  "Goa",
+  "Gujarat",
+  "Haryana",
+  "Himachal Pradesh",
+  "Jharkhand",
+  "Karnataka",
+  "Kerala",
+  "Madhya Pradesh",
+  "Maharashtra",
+  "Manipur",
+  "Meghalaya",
+  "Mizoram",
+  "Nagaland",
+  "Odisha",
+  "Punjab",
+  "Rajasthan",
+  "Sikkim",
+  "Tamil Nadu",
+  "Telangana",
+  "Tripura",
+  "Uttar Pradesh",
+  "Uttarakhand",
+  "West Bengal",
+  "Andaman and Nicobar Islands",
+  "Chandigarh",
+  "Dadra and Nagar Haveli and Daman and Diu",
+  "Delhi",
+  "Jammu and Kashmir",
+  "Ladakh",
+  "Lakshadweep",
+  "Puducherry",
+] as const;
+export type IndianState = (typeof INDIAN_STATES)[number];
+
 // ── Hotel ────────────────────────────────────────────────────────────────────
 // Canonical category values. The client form sends human-readable labels
 // ("Hotel", "Guest House", …); the controller normalizes to these snake values.
@@ -112,6 +156,29 @@ export type DepartureStatus = (typeof DEPARTURE_STATUS)[number];
 
 export const DIFFICULTY_LEVELS = ["easy", "moderate", "challenging"] as const;
 export type DifficultyLevel = (typeof DIFFICULTY_LEVELS)[number];
+
+// ── Holiday Package ──────────────────────────────────────────────────────────
+// Room category + meal plan pairing mirrors how OTAs (MakeMyTrip, Yatra,
+// Cleartrip) price a holiday package: one listing, several room-tier price rows.
+export const HOLIDAY_ROOM_TYPES = [
+  "standard",
+  "deluxe",
+  "super_deluxe",
+  "premium",
+  "luxury",
+  "suite",
+] as const;
+export type HolidayRoomType = (typeof HOLIDAY_ROOM_TYPES)[number];
+
+// EP / CP / MAP / AP / AI, in plain English.
+export const HOLIDAY_MEAL_PLANS = [
+  "room_only",
+  "breakfast",
+  "half_board",
+  "full_board",
+  "all_inclusive",
+] as const;
+export type HolidayMealPlan = (typeof HOLIDAY_MEAL_PLANS)[number];
 
 // ── Cruise ───────────────────────────────────────────────────────────────────
 export const CRUISE_TYPES = ["river", "sea", "backwater", "luxury", "budget"] as const;
@@ -255,6 +322,10 @@ export const LISTING_REF_MODELS = [
   "VisaListing",
   "CruiseListing",
   "EventListing",
+  // A marketplace Package itself (e.g. a "taxi_package" catalog entry) — lets a
+  // bundle/holiday component point at another partner's or the platform's package
+  // rather than a typed listing. Used by holiday tie-ups (hotel + taxi package).
+  "Package",
 ] as const;
 export type ListingRefModel = (typeof LISTING_REF_MODELS)[number];
 

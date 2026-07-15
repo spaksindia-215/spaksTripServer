@@ -5,6 +5,7 @@ import { TaxiListingModel } from "../models/partner/TaxiListing";
 import { TaxiPackageModel } from "../models/partner/TaxiPackage";
 import { TourListingModel } from "../models/partner/TourListing";
 import { TourPackageModel } from "../models/partner/TourPackage";
+import { HolidayPackageModel } from "../models/partner/HolidayPackage";
 import { CruiseListingModel } from "../models/partner/CruiseListing";
 import { SightseeingListingModel } from "../models/partner/SightseeingListing";
 import { TransferListingModel } from "../models/partner/TransferListing";
@@ -25,6 +26,7 @@ export type ListingType =
   | "taxi_package"
   | "tour"
   | "tour_package"
+  | "holiday"
   | "cruise"
   | "sightseeing"
   | "transfer"
@@ -109,6 +111,15 @@ const REGISTRY: Record<ListingType, RegistryEntry> = {
     label: "Tour Package",
     view: (d) => ({
       title: str(d.title) ?? "Tour package",
+      thumbnail: str(d.thumbnail) ?? firstImageUrl(d.images),
+      subtitle: str(get(d, "route", "origin")),
+    }),
+  },
+  holiday: {
+    model: HolidayPackageModel,
+    label: "Holiday Package",
+    view: (d) => ({
+      title: str(d.title) ?? "Holiday package",
       thumbnail: str(d.thumbnail) ?? firstImageUrl(d.images),
       subtitle: str(get(d, "route", "origin")),
     }),

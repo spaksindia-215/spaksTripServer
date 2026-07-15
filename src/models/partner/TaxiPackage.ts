@@ -3,8 +3,10 @@ import { randomBytes } from "crypto";
 import {
   RESOURCE_STATUS,
   CURRENCY_CODES,
+  INDIAN_STATES,
   type ResourceStatus,
   type CurrencyCode,
+  type IndianState,
 } from "./_shared/enums";
 import { ImageSchema, type Image } from "./_shared/subdocs";
 
@@ -22,6 +24,12 @@ export interface TaxiPackageVehicleSnapshot {
   images: string[];
 }
 
+export interface TaxiPackageItineraryLocation {
+  lat: number;
+  lng: number;
+  address?: string;
+}
+
 export interface TaxiPackageItineraryDay {
   day: number;
   title?: string;
@@ -29,6 +37,9 @@ export interface TaxiPackageItineraryDay {
   activities: string[];
   distance?: number;
   overnight?: string;
+  // Pin-dropped location for this day (mirrors TourPackageItineraryLocation);
+  // optional — older itinerary days may not have one.
+  location?: TaxiPackageItineraryLocation;
 }
 
 export interface ITaxiPackage {
@@ -37,8 +48,12 @@ export interface ITaxiPackage {
   title: string;
   slug: string;
   thumbnail?: string;
+  state?: IndianState;
   route: {
     origin: string;
+    // Pin-dropped coordinates of the origin — optional so the customer route map
+    // can start at the origin marker; older packages only have the origin name.
+    originLocation?: TaxiPackageItineraryLocation;
     destinations: string[];
     totalKm?: number;
     durationDays: number;
@@ -80,6 +95,15 @@ const vehicleSnapshotSchema = new Schema<TaxiPackageVehicleSnapshot>(
   { _id: false },
 );
 
+const itineraryLocationSchema = new Schema<TaxiPackageItineraryLocation>(
+  {
+    lat: { type: Number, required: [true, "location.lat is required"], min: -90, max: 90 },
+    lng: { type: Number, required: [true, "location.lng is required"], min: -180, max: 180 },
+    address: { type: String, trim: true },
+  },
+  { _id: false },
+);
+
 const itinerarySchema = new Schema<TaxiPackageItineraryDay>(
   {
     day: { type: Number, required: [true, "itinerary day is required"], min: [1, "day must be at least 1"] },
@@ -88,6 +112,7 @@ const itinerarySchema = new Schema<TaxiPackageItineraryDay>(
     activities: { type: [String], default: [] },
     distance: { type: Number, min: [0, "distance cannot be negative"] },
     overnight: { type: String, trim: true },
+    location: { type: itineraryLocationSchema, default: undefined },
   },
   { _id: false },
 );
@@ -104,8 +129,10 @@ const taxiPackageSchema = new Schema<ITaxiPackage>(
     title: { type: String, required: [true, "title is required"], trim: true },
     slug: { type: String, unique: true, lowercase: true, trim: true },
     thumbnail: { type: String, trim: true },
+    state: { type: String, enum: INDIAN_STATES, index: true },
     route: {
       origin: { type: String, required: [true, "route.origin is required"], trim: true },
+      originLocation: { type: itineraryLocationSchema, default: undefined },
       destinations: {
         type: [String],
         default: [],

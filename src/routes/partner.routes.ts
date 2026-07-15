@@ -29,6 +29,10 @@ import {
   listTourPackages,
   updateTourPackage,
   deleteTourPackage,
+  createHolidayPackage,
+  listHolidayPackages,
+  updateHolidayPackage,
+  deleteHolidayPackage,
   createCruiseListing,
   listCruiseListings,
   updateCruiseListing,
@@ -93,6 +97,12 @@ router.get("/tour-packages", listTourPackages);
 router.post("/tour-packages", uploadAny, createTourPackage);
 router.patch("/tour-packages/:id", uploadAny, updateTourPackage);
 router.delete("/tour-packages/:id", deleteTourPackage);
+
+// Holiday packages (typed model; cross-model refs; thumbnail/images to Cloudinary).
+router.get("/holiday-packages", listHolidayPackages);
+router.post("/holiday-packages", uploadAny, createHolidayPackage);
+router.patch("/holiday-packages/:id", uploadAny, updateHolidayPackage);
+router.delete("/holiday-packages/:id", deleteHolidayPackage);
 
 // Cruises (typed model; vessel images to Cloudinary).
 router.get("/cruises", listCruiseListings);
