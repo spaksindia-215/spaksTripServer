@@ -6,7 +6,7 @@ import { env } from "../config/env";
 // where payload carries only an expiry.
 
 export const ADMIN_COOKIE_NAME = "adminSession";
-const ADMIN_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const ADMIN_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 function sign(data: string): string {
   return crypto.createHmac("sha256", env.adminSessionSecret).update(data).digest("hex");
