@@ -5,6 +5,7 @@ import { ServiceEnquiryModel, type ServiceEnquiryDoc } from "../models/partner/S
 import { validateSightseeingListing } from "../validators/sightseeingListing.validators";
 import { uploadManyToCloudinary } from "../lib/cloudinary";
 import { resolveOptionalUser } from "../middleware/auth";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 import {
   RESOURCE_STATUS,
@@ -57,12 +58,6 @@ async function uploadImages(req: Request): Promise<string[]> {
   const toUpload = files.filter((f) => f.fieldname === "images");
   if (toUpload.length === 0) return [];
   return uploadManyToCloudinary(toUpload, "spakstrip/sightseeing");
-}
-
-function paginate(q: Record<string, unknown>): { page: number; limit: number; skip: number } {
-  const page = Math.max(1, Number(q.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(q.limit) || 20));
-  return { page, limit, skip: (page - 1) * limit };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -252,7 +247,7 @@ export async function publicBrowse(req: Request, res: Response, next: NextFuncti
     ]);
     res.json({
       items: docs.map((d) => d.toJSON()),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);

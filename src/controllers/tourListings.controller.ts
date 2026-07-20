@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { TourListingModel } from "../models/partner/TourListing";
 import { validateTourListing } from "../validators/tourListing.validators";
 import { uploadManyToCloudinary } from "../lib/cloudinary";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 
 function escapeRegex(s: string): string {
@@ -73,7 +74,7 @@ export async function publicListTourListings(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { destination, category, q, page = "1", limit = "20" } = req.query as Record<string, string>;
+    const { destination, category, q } = req.query as Record<string, string>;
     const filter: Record<string, unknown> = { status: "active" };
 
     if (destination) {
@@ -82,27 +83,20 @@ export async function publicListTourListings(
     if (category) filter.category = category;
     if (q) filter.$text = { $search: q };
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
+    const params = paginate(req.query as Record<string, unknown>);
 
     const [items, total] = await Promise.all([
       TourListingModel.find(filter)
         .populate("partner", "name companyName")
         .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
+        .skip(params.skip)
+        .limit(params.limit),
       TourListingModel.countDocuments(filter),
     ]);
 
     res.json({
       items: items.map((i) => i.toJSON()),
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
+      pagination: pageMeta(params, total),
     });
   } catch (e) {
     next(e);

@@ -16,6 +16,7 @@ import { EventListingModel } from "../models/partner/EventListing";
 import { validatePackage, validateOffer, validateEnquiry } from "../validators/package.validators";
 import { uploadManyToCloudinary } from "../lib/cloudinary";
 import { resolveOptionalUser } from "../middleware/auth";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 import {
   RESOURCE_STATUS,
@@ -70,12 +71,6 @@ async function uploadPackageImages(req: Request): Promise<string[]> {
   const toUpload = files.filter((f) => f.fieldname === "images");
   if (toUpload.length === 0) return [];
   return uploadManyToCloudinary(toUpload, "spakstrip/packages");
-}
-
-function paginate(q: Record<string, unknown>): { page: number; limit: number; skip: number } {
-  const page = Math.max(1, Number(q.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(q.limit) || 20));
-  return { page, limit, skip: (page - 1) * limit };
 }
 
 // Public package-card augmented with operator count + lowest active offer price.
@@ -550,7 +545,7 @@ export async function publicListPackages(req: Request, res: Response, next: Next
     ]);
     res.json({
       items: await withOfferStats(docs),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);
@@ -654,7 +649,7 @@ export async function adminListPackages(req: Request, res: Response, next: NextF
     ]);
     res.json({
       items: items.map((i) => i.toJSON()),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);
@@ -830,7 +825,7 @@ export async function adminListEnquiries(req: Request, res: Response, next: Next
     ]);
     res.json({
       items: items.map((i) => i.toJSON()),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);

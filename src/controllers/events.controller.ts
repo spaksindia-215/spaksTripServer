@@ -19,6 +19,7 @@ import {
   updateTransactionStatus,
 } from "../services/transactionService";
 import { env } from "../config/env";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 import { EVENT_STATUS, type EventStatus } from "../models/partner/_shared/enums";
 import {
@@ -383,12 +384,6 @@ function publicFilter(q: Record<string, unknown>): Record<string, unknown> {
   return filter;
 }
 
-function paginate(q: Record<string, unknown>): { page: number; limit: number; skip: number } {
-  const page = Math.max(1, Number(q.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(q.limit) || 20));
-  return { page, limit, skip: (page - 1) * limit };
-}
-
 // Build the active-external-events filter from the same public query params (a
 // subset — external rows have no eventType, and price lives on priceRange.min).
 function externalFilter(q: Record<string, unknown>): Record<string, unknown> {
@@ -496,7 +491,7 @@ export async function listEvents(req: Request, res: Response, next: NextFunction
     const start = (page - 1) * limit;
     res.json({
       items: cards.slice(start, start + limit),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);
@@ -520,7 +515,7 @@ export async function searchEvents(req: Request, res: Response, next: NextFuncti
     ]);
     res.json({
       items: items.map((i) => i.toJSON()),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);
@@ -991,7 +986,7 @@ export async function adminListEvents(req: Request, res: Response, next: NextFun
     ]);
     res.json({
       items: items.map((i) => i.toJSON()),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);

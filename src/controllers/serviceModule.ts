@@ -3,6 +3,7 @@ import mongoose, { Types, Model } from "mongoose";
 import { ServiceEnquiryModel, type ServiceEnquiryDoc } from "../models/partner/ServiceEnquiry";
 import { uploadManyToCloudinary } from "../lib/cloudinary";
 import { resolveOptionalUser } from "../middleware/auth";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 import {
   ENQUIRY_STATUS,
@@ -63,11 +64,6 @@ function listingBody(req: Request): Record<string, unknown> {
     }
   }
   return (req.body as Record<string, unknown>) ?? {};
-}
-function paginate(q: Record<string, unknown>): { page: number; limit: number; skip: number } {
-  const page = Math.max(1, Number(q.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(q.limit) || 20));
-  return { page, limit, skip: (page - 1) * limit };
 }
 
 export interface ServiceModuleHandlers {
@@ -247,7 +243,7 @@ export function makeServiceModule(cfg: ServiceModuleConfig): ServiceModuleHandle
         ]);
         res.json({
           items: docs.map((d: { toJSON: () => unknown }) => d.toJSON()),
-          pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+          pagination: pageMeta({ page, limit }, total),
         });
       } catch (e) {
         next(e);

@@ -13,6 +13,7 @@ import { SelfDriveListingModel } from "../models/partner/SelfDriveListing";
 import { IslandhopperListingModel } from "../models/partner/IslandhopperListing";
 import { VisaListingModel } from "../models/partner/VisaListing";
 import { RESOURCE_STATUS } from "../models/partner/_shared/enums";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 
 // Generic moderation layer shared by every partner-resource vertical. Each type
@@ -226,12 +227,15 @@ export async function adminListListings(
     const filter: Record<string, unknown> = {};
     if (statusRaw !== "all") filter.status = statusRaw;
 
+    // Cap each type; the merged set is sorted + paginated in-memory. Mirrors the
+    // public events endpoint — a single skip/limit can't span N collections.
+    const CAP = 500;
     const groups = await Promise.all(
       types.map(async (type) => {
         const docs = await REGISTRY[type].model
           .find(filter)
           .sort({ createdAt: -1 })
-          .limit(200)
+          .limit(CAP)
           .populate("partner", "name email")
           .lean();
         return (docs as AnyDoc[]).map((d) => normalize(type, d));
@@ -241,7 +245,12 @@ export async function adminListListings(
     const items = groups.flat().sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
     );
-    res.json({ items });
+
+    const params = paginate(req.query as Record<string, unknown>);
+    res.json({
+      items: items.slice(params.skip, params.skip + params.limit),
+      pagination: pageMeta(params, items.length),
+    });
   } catch (e) {
     next(e);
   }

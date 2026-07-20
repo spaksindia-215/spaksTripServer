@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import mongoose from "mongoose";
 import { HotelListingModel } from "../models/partner/HotelListing";
 import { HotelEnquiryModel } from "../models/partner/HotelEnquiry";
+import { paginate, pageMeta } from "../lib/pagination";
 import { HttpError } from "../middleware/error";
 import { HOTEL_TYPES, ENQUIRY_STATUS, type EnquiryStatus } from "../models/partner/_shared/enums";
 
@@ -27,11 +28,6 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function paginate(q: Record<string, unknown>): { page: number; limit: number; skip: number } {
-  const page = Math.max(1, Number(q.page) || 1);
-  const limit = Math.min(50, Math.max(1, Number(q.limit) || 20));
-  return { page, limit, skip: (page - 1) * limit };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -63,7 +59,7 @@ export async function browse(req: Request, res: Response, next: NextFunction): P
     ]);
     res.json({
       items: docs.map((d) => d.toJSON()),
-      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      pagination: pageMeta({ page, limit }, total),
     });
   } catch (e) {
     next(e);
