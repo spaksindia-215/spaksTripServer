@@ -122,3 +122,63 @@ test("validatePackage leaves specs as a loose passthrough for non-sightseeing ki
 test("validatePackage still requires a title regardless of kind", () => {
   assert.throws(() => validatePackage({ body: { kind: "sightseeing" }, imageUrls: [] }), /title is required/);
 });
+
+// ── Location (scope-exclusive) ────────────────────────────────────────────────
+
+test("validatePackage keeps the Indian state on a domestic listing", () => {
+  const result = validatePackage({
+    body: { kind: "tour_package", title: "Kerala Backwaters", scope: "domestic", state: "Kerala" },
+    imageUrls: [],
+  });
+  assert.equal(result.state, "Kerala");
+  assert.equal(result.country, undefined);
+  assert.equal(result.region, undefined);
+});
+
+test("validatePackage keeps country + region on an international listing", () => {
+  const result = validatePackage({
+    body: {
+      kind: "tour_package", title: "Bali Escape", scope: "international",
+      country: "Indonesia", region: "Bali",
+    },
+    imageUrls: [],
+  });
+  assert.equal(result.country, "Indonesia");
+  assert.equal(result.region, "Bali");
+  assert.equal(result.state, undefined);
+});
+
+test("validatePackage drops an Indian state sent on an international listing", () => {
+  const result = validatePackage({
+    body: {
+      kind: "tour_package", title: "Bali Escape", scope: "international",
+      state: "Kerala", country: "Indonesia",
+    },
+    imageUrls: [],
+  });
+  assert.equal(result.state, undefined);
+  assert.equal(result.country, "Indonesia");
+});
+
+test("validatePackage drops country + region sent on a domestic listing", () => {
+  const result = validatePackage({
+    body: {
+      kind: "tour_package", title: "Kerala Backwaters", scope: "domestic",
+      country: "Indonesia", region: "Bali", state: "Kerala",
+    },
+    imageUrls: [],
+  });
+  assert.equal(result.country, undefined);
+  assert.equal(result.region, undefined);
+  assert.equal(result.state, "Kerala");
+});
+
+test("validatePackage rejects a country outside the enum (India is domestic-only)", () => {
+  assert.throws(
+    () => validatePackage({
+      body: { kind: "tour_package", title: "Nowhere", scope: "international", country: "India" },
+      imageUrls: [],
+    }),
+    /country must be one of/,
+  );
+});

@@ -12,6 +12,7 @@ import {
   SIGHTSEEING_DURATION_UNITS,
   SERVICE_CANCELLATION_POLICIES,
   INDIAN_STATES,
+  INTERNATIONAL_COUNTRIES,
   type PackageKind,
   type PackageScope,
   type CurrencyCode,
@@ -72,6 +73,8 @@ export type ValidatedPackage = Pick<
   | "highlights"
   | "tags"
   | "state"
+  | "country"
+  | "region"
   | "route"
   | "itinerary"
   | "components"
@@ -236,8 +239,16 @@ export function validatePackage(input: PackageRawInput): ValidatedPackage {
 
   const images = input.imageUrls.map((url, i) => ({ url, isPrimary: i === 0 }));
 
+  // Location is scope-exclusive: a domestic listing is placed by Indian state, an
+  // international one by country + region. Each side is dropped for the other scope
+  // so a listing flipped from domestic to international (or back) can't keep a stale
+  // location — the browse-by-state/country surfaces filter on these fields directly.
   const stateRaw = optStr(b, "state");
   const state = stateRaw !== undefined ? inEnum("package", INDIAN_STATES, stateRaw, "state") : undefined;
+  const countryRaw = optStr(b, "country");
+  const country = countryRaw !== undefined
+    ? inEnum("package", INTERNATIONAL_COUNTRIES, countryRaw, "country")
+    : undefined;
 
   return {
     kind,
@@ -247,7 +258,9 @@ export function validatePackage(input: PackageRawInput): ValidatedPackage {
     description: optStr(b, "description"),
     highlights: strArr(b, "highlights"),
     tags: strArr(b, "tags"),
-    state,
+    state: scope === "domestic" ? state : undefined,
+    country: scope === "international" ? country : undefined,
+    region: scope === "international" ? optStr(b, "region") : undefined,
     route: validateRoute(b.route),
     itinerary: validateItinerary(b.itinerary),
     components,

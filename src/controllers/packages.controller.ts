@@ -24,6 +24,7 @@ import {
   PACKAGE_SCOPES,
   ENQUIRY_STATUS,
   INDIAN_STATES,
+  INTERNATIONAL_COUNTRIES,
   type ResourceStatus,
   type EnquiryStatus,
   type ListingRefModel,
@@ -374,7 +375,10 @@ export async function partnerCreateHolidayTieUp(req: Request, res: Response, nex
       status: "pending",
       title: `${hotel.name} + ${taxiPackage.title}`,
       description: `A complete holiday package combining a ${nights}-night stay at ${hotel.name} with the "${taxiPackage.title}" taxi package.`,
+      // Inherit the source package's location — whichever half its scope uses.
       state: taxiPackage.state,
+      country: taxiPackage.country,
+      region: taxiPackage.region,
       images: hotel.images.length > 0 ? hotel.images.slice(0, 1) : taxiPackage.images,
       thumbnail: hotel.images[0]?.url ?? taxiPackage.thumbnail,
       route: taxiPackage.route,
@@ -536,6 +540,9 @@ export async function publicListPackages(req: Request, res: Response, next: Next
       filter["route.destinations"] = new RegExp(q.destination.trim(), "i");
     }
     if (typeof q.state === "string" && (INDIAN_STATES as readonly string[]).includes(q.state)) filter.state = q.state;
+    if (typeof q.country === "string" && (INTERNATIONAL_COUNTRIES as readonly string[]).includes(q.country)) {
+      filter.country = q.country;
+    }
     if (typeof q.q === "string" && q.q.trim()) filter.$text = { $search: q.q.trim() };
 
     const { page, limit, skip } = paginate(q);

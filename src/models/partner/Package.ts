@@ -7,6 +7,7 @@ import {
   CURRENCY_CODES,
   LISTING_REF_MODELS,
   INDIAN_STATES,
+  INTERNATIONAL_COUNTRIES,
   type ResourceStatus,
   type PackageKind,
   type PackageScope,
@@ -14,6 +15,7 @@ import {
   type CurrencyCode,
   type ListingRefModel,
   type IndianState,
+  type InternationalCountry,
 } from "./_shared/enums";
 import { ImageSchema, type Image } from "./_shared/subdocs";
 import { attachSlug } from "./_shared/schemaHelpers";
@@ -67,9 +69,14 @@ export interface IPackage {
   description?: string;
   highlights: string[];
   tags: string[];
-  // Indian state this listing operates in — drives state-wise browse categories.
-  // Domestic-only; left unset for international-scope listings.
+  // Where the listing operates. The two halves are scope-exclusive and enforced as
+  // such by validatePackage: a domestic listing carries `state` (an Indian state,
+  // which drives the state-wise browse categories); an international one carries
+  // `country` + the free-text `region` (state/province/emirate/prefecture — too
+  // many shapes worldwide to enumerate) and no `state`.
   state?: IndianState;
+  country?: InternationalCountry;
+  region?: string;
   route: PackageRoute;
   itinerary: PackageItineraryDay[];
   components: PackageComponent[]; // populated only for kind "bundle"
@@ -129,6 +136,8 @@ const packageSchema = new Schema<IPackage>(
     highlights: { type: [String], default: [] },
     tags: { type: [String], default: [] },
     state: { type: String, enum: INDIAN_STATES, index: true },
+    country: { type: String, enum: INTERNATIONAL_COUNTRIES, index: true },
+    region: { type: String, trim: true, maxlength: [80, "region cannot exceed 80 chars"] },
     route: {
       origin: { type: String, trim: true },
       destinations: { type: [String], default: [] },
